@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Manas roadmap
+    url: https://github.com/AarambhDevHub/manas/blob/main/ROADMAP.md
+    about: Check the roadmap before opening large feature requests. Every stage has mandatory tests — please read the relevant stage first.

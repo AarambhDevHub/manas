@@ -1,0 +1,7 @@
+[package]
+name = "manas-ingest"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+manas-core = { path = "../manas-core" }

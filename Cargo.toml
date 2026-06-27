@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "manas-core",
+    "manas-store",
+    "manas-learn",
+    "manas-ingest",
+    "manas-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Aarambh Dev Hub"]
+repository = "https://github.com/AarambhDevHub/manas"
+homepage = "https://github.com/AarambhDevHub/manas"
+description = "Manas — a self-growing, never-forgetting, always-updated personal AI brain written in Rust"
+
+
+[workspace.dependencies]
+manas-core = { path = "manas-core" }
+manas-store = { path = "manas-store" }
+manas-learn = { path = "manas-learn" }
+manas-ingest = { path = "manas-ingest" }
