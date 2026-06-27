@@ -9,9 +9,20 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### In Progress
+### Completed
 
-- Stage 0 — Workspace and foundation
+- Stage 0 — Workspace and foundation.
+- Stage 1 — Associative memory proof.
+
+### Added
+
+- Standalone Stage 1 experiment at `manas-core/src/experiment.rs`.
+- Deterministic proof that `cat`, `paris`, and `rust` associations can be learned
+  into neural weights and retrieved by cosine similarity across five fixed seeds.
+
+### Next
+
+- Stage 2 — Anti-forgetting proof.
 
 ---
 

@@ -68,9 +68,9 @@ from Stage 2 onward.**
 
 | Milestone | Name | Status |
 |---|---|---|
-| Stage 0 | Workspace and foundation | Planned |
-| Stage 1 | The engine — associative memory proof | Planned |
-| Stage 2 | Anti-forgetting proof | Planned |
+| Stage 0 | Workspace and foundation | Complete |
+| Stage 1 | The engine — associative memory proof | Complete |
+| Stage 2 | Anti-forgetting proof | Next |
 | Stage 3 | Crate structure | Planned |
 | Stage 4 | Persistence — `.manas` binary format | Planned |
 | Stage 5 | Character n-gram tokenizer | Planned |
@@ -142,9 +142,9 @@ cargo build
 
 ### Done When
 
-- [ ] `cargo build` passes clean
-- [ ] All 5 crates exist with empty `lib.rs`
-- [ ] Workspace `Cargo.toml` compiles correctly
+- [x] `cargo build` passes clean
+- [x] All 5 crates exist with `lib.rs`
+- [x] Workspace `Cargo.toml` compiles correctly
 
 ---
 
@@ -265,22 +265,30 @@ The exact numbers do not matter. What matters is:
 ### Test
 
 ```bash
-cargo run --example experiment
-# or
-rustc experiment.rs && ./experiment
+rustc --edition=2024 -O -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage1
+/tmp/manas-stage1
+
+rustc --edition=2024 --test -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage1-tests
+/tmp/manas-stage1-tests
 ```
 
 Check:
-- [ ] Each fact's similarity to its own target > 0.70
-- [ ] Each fact's similarity to wrong targets < 0.35
-- [ ] The difference is consistent across 5 independent runs
+- [x] Each fact's similarity to its own target > 0.70
+- [x] Each fact's similarity to wrong targets < 0.35
+- [x] The difference is consistent across 5 independent runs
 
 ### Done When
 
-- [ ] Similarity to correct target consistently > 0.70
-- [ ] Similarity to wrong targets consistently < 0.35
-- [ ] Works reliably across multiple random seeds
-- [ ] You understand exactly why it works — not just that it works
+- [x] Similarity to correct target consistently > 0.70
+- [x] Similarity to wrong targets consistently < 0.35
+- [x] Works reliably across multiple random seeds
+- [x] You understand exactly why it works — not just that it works
+
+Completion note:
+- Implemented as `manas-core/src/experiment.rs`
+- Uses a deterministic hash-based encoder, one hidden `tanh` layer, linear output,
+  MSE loss, manual backpropagation, gradient clipping, and five fixed seeds
+- Current proof result: `PASS: associative memory proof succeeded for all seeds`
 
 **Do not move to Stage 2 until this is solid.**
 
