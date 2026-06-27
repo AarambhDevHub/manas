@@ -119,8 +119,8 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 |---|---|---|
 | Stage 0 | Workspace and foundation | Complete |
 | Stage 1 | Associative memory proof | Complete |
-| Stage 2 | Anti-forgetting proof | Next |
-| Stage 3 | Crate structure | Planned |
+| Stage 2 | Anti-forgetting proof | Complete |
+| Stage 3 | Crate structure | Next |
 | Stage 4 | `.manas` binary format | Planned |
 | Stage 5 | Character n-gram tokenizer | Planned |
 | Stage 6 | Positional embeddings | Planned |
@@ -129,23 +129,23 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 9 | `manas teach` and `manas ask` | Planned |
 | Stage 10+ | File ingestion, inspect, benchmarks, layer growth | Planned |
 
-Stage 1 is implemented as a standalone proof in `manas-core/src/experiment.rs`.
-It trains a small neural network to associate `cat`, `paris`, and `rust` with
-target concept vectors, then verifies retrieval from the learned weights by
-cosine similarity across five deterministic seeds.
+Stages 1 and 2 are implemented as a standalone proof in
+`manas-core/src/experiment.rs`. The experiment first verifies associative
+retrieval for `cat`, `paris`, and `rust`, then verifies that five anchor facts
+survive after learning 50 unrelated facts.
 
-Run the Stage 1 proof:
+Run the proof:
 
 ```bash
-rustc --edition=2024 -O -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage1
-/tmp/manas-stage1
+rustc --edition=2024 -O -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage2
+/tmp/manas-stage2
 ```
 
-Run the Stage 1 tests:
+Run the standalone tests:
 
 ```bash
-rustc --edition=2024 --test -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage1-tests
-/tmp/manas-stage1-tests
+rustc --edition=2024 --test -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage2-tests
+/tmp/manas-stage2-tests
 ```
 
 See [ROADMAP.md](./ROADMAP.md) for the full plan with tests.

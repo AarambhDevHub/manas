@@ -70,8 +70,8 @@ from Stage 2 onward.**
 |---|---|---|
 | Stage 0 | Workspace and foundation | Complete |
 | Stage 1 | The engine — associative memory proof | Complete |
-| Stage 2 | Anti-forgetting proof | Next |
-| Stage 3 | Crate structure | Planned |
+| Stage 2 | Anti-forgetting proof | Complete |
+| Stage 3 | Crate structure | Next |
 | Stage 4 | Persistence — `.manas` binary format | Planned |
 | Stage 5 | Character n-gram tokenizer | Planned |
 | Stage 6 | Positional embeddings | Planned |
@@ -473,10 +473,26 @@ for (a, t) in anchors.iter().zip(targets.iter()) {
 
 ### Done When
 
-- [ ] All 5 anchor facts survive at > 0.65 similarity after 50 new facts
-- [ ] New facts also learn to > 0.70 similarity
-- [ ] Forgetting delta < 0.15 for each anchor
-- [ ] Test passes reliably across 5 independent runs with different random seeds
+- [x] All 5 anchor facts survive at > 0.65 similarity after 50 new facts
+- [x] New facts also learn to > 0.70 similarity
+- [x] Forgetting delta < 0.15 for each anchor
+- [x] Test passes reliably across 5 independent runs with different random seeds
+
+Completion note:
+- Implemented inside `manas-core/src/experiment.rs`
+- Adds `Open`, `Guarded`, and `Frozen` protection states to the standalone proof
+- Freezes protected anchor neurons and their output edges before learning 50 new facts
+- Current proof result: `PASS: anti-forgetting proof succeeded for all seeds`
+
+Run:
+
+```bash
+rustc --edition=2024 -O -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage2
+/tmp/manas-stage2
+
+rustc --edition=2024 --test -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage2-tests
+/tmp/manas-stage2-tests
+```
 
 **This stage is the hardest. Take as long as needed. Do not move on until it is solid.**
 
