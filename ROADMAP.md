@@ -71,8 +71,8 @@ from Stage 2 onward.**
 | Stage 0 | Workspace and foundation | Complete |
 | Stage 1 | The engine — associative memory proof | Complete |
 | Stage 2 | Anti-forgetting proof | Complete |
-| Stage 3 | Crate structure | Next |
-| Stage 4 | Persistence — `.manas` binary format | Planned |
+| Stage 3 | Crate structure | Complete |
+| Stage 4 | Persistence — `.manas` binary format | Next |
 | Stage 5 | Character n-gram tokenizer | Planned |
 | Stage 6 | Positional embeddings | Planned |
 | Stage 7 | Growth system | Planned |
@@ -587,10 +587,20 @@ cargo test -p manas-learn anti_forgetting
 
 ### Done When
 
-- [ ] `manas-core` compiles clean with only `rand` dependency
-- [ ] `manas-learn` compiles clean depending only on `manas-core`
-- [ ] `anti_forgetting` test passes
-- [ ] `cargo test` runs with zero failures
+- [x] `manas-core` compiles clean with only `rand` dependency
+- [x] `manas-learn` compiles clean depending only on `manas-core`
+- [x] `anti_forgetting` test passes
+- [x] `cargo test` runs with zero failures
+
+Completion note:
+- Implemented the maintained engine modules in `manas-core/src/activation.rs`,
+  `manas-core/src/neuron.rs`, `manas-core/src/layer.rs`,
+  `manas-core/src/network.rs`, and `manas-core/src/error.rs`
+- Implemented Stage 3 learning modules in `manas-learn/src/encoder.rs`,
+  `manas-learn/src/backprop.rs`, `manas-learn/src/trainer.rs`, and
+  `manas-learn/src/fixtures.rs`
+- Added `manas-learn/tests/anti_forgetting.rs` as the crate-backed Stage 3 gate
+- Current crate proof result: `cargo test -p manas-learn anti_forgetting` passes
 
 ---
 

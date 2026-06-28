@@ -120,8 +120,8 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 0 | Workspace and foundation | Complete |
 | Stage 1 | Associative memory proof | Complete |
 | Stage 2 | Anti-forgetting proof | Complete |
-| Stage 3 | Crate structure | Next |
-| Stage 4 | `.manas` binary format | Planned |
+| Stage 3 | Crate structure | Complete |
+| Stage 4 | `.manas` binary format | Next |
 | Stage 5 | Character n-gram tokenizer | Planned |
 | Stage 6 | Positional embeddings | Planned |
 | Stage 7 | Growth system | Planned |
@@ -129,10 +129,10 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 9 | `manas teach` and `manas ask` | Planned |
 | Stage 10+ | File ingestion, inspect, benchmarks, layer growth | Planned |
 
-Stages 1 and 2 are implemented as a standalone proof in
-`manas-core/src/experiment.rs`. The experiment first verifies associative
-retrieval for `cat`, `paris`, and `rust`, then verifies that five anchor facts
-survive after learning 50 unrelated facts.
+Stages 1 and 2 are preserved as a standalone proof in
+`manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
+maintained crate modules in `manas-core` and `manas-learn`, with the
+anti-forgetting gate covered by `manas-learn/tests/anti_forgetting.rs`.
 
 Run the proof:
 
@@ -146,6 +146,12 @@ Run the standalone tests:
 ```bash
 rustc --edition=2024 --test -D warnings manas-core/src/experiment.rs -o /tmp/manas-stage2-tests
 /tmp/manas-stage2-tests
+```
+
+Run the maintained crate proof:
+
+```bash
+cargo test -p manas-learn anti_forgetting
 ```
 
 See [ROADMAP.md](./ROADMAP.md) for the full plan with tests.

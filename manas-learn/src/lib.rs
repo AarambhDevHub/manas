@@ -1,14 +1,9 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Learning utilities for the Stage 3 Manas engine.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod backprop;
+pub mod encoder;
+pub mod fixtures;
+pub mod trainer;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use encoder::Encoder;
+pub use trainer::{EncodedFact, Trainer};
