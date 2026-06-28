@@ -2,6 +2,7 @@ use crate::activation::Activation;
 use crate::error::ManasError;
 use crate::layer::Layer;
 use crate::neuron::{Neuron, ProtectionLevel, dot, normalize_in_place};
+use std::collections::HashSet;
 
 pub const GUARD_DELTA: f32 = 0.001;
 const GRAD_CLIP: f32 = 1.0;
@@ -98,6 +99,51 @@ impl Network {
             output_dim,
             protected_inputs: Vec::new(),
         }
+    }
+
+    pub fn from_persisted_layers(
+        created_at: u64,
+        version: u8,
+        input_dim: usize,
+        layers: Vec<Layer>,
+    ) -> Result<Self, ManasError> {
+        validate_persisted_layers(input_dim, &layers)?;
+
+        let hidden_dim = layers[0].neurons.len();
+        let output_dim = layers[1].neurons.len();
+        let total_neurons = layers.iter().map(|layer| layer.neurons.len() as u64).sum();
+        let next_id = layers
+            .iter()
+            .flat_map(|layer| layer.neurons.iter())
+            .map(|neuron| neuron.id)
+            .max()
+            .map_or(0, |id| id.saturating_add(1));
+
+        let protected_inputs = layers[0]
+            .neurons
+            .iter()
+            .filter(|neuron| {
+                matches!(neuron.activation, Activation::Keyed)
+                    && matches!(neuron.protection_level, ProtectionLevel::Frozen)
+            })
+            .map(|neuron| {
+                let mut protected = neuron.weights.clone();
+                normalize_in_place(&mut protected);
+                protected
+            })
+            .collect();
+
+        Ok(Self {
+            layers,
+            total_neurons,
+            created_at,
+            version,
+            next_id,
+            input_dim,
+            hidden_dim,
+            output_dim,
+            protected_inputs,
+        })
     }
 
     pub fn forward(&self, input: &[f32]) -> Vec<f32> {
@@ -466,6 +512,63 @@ impl Network {
             hidden_neuron.bias_protection = ProtectionLevel::Frozen;
         }
     }
+}
+
+fn validate_persisted_layers(input_dim: usize, layers: &[Layer]) -> Result<(), ManasError> {
+    if layers.len() != 2 {
+        return Err(ManasError::InvalidNetwork(format!(
+            "Stage 4 persistence expects exactly 2 layers, found {}",
+            layers.len()
+        )));
+    }
+    if input_dim == 0 {
+        return Err(ManasError::InvalidNetwork(
+            "input dimension must be greater than zero".to_string(),
+        ));
+    }
+    if layers[0].neurons.is_empty() || layers[1].neurons.is_empty() {
+        return Err(ManasError::InvalidNetwork(
+            "persisted network layers cannot be empty".to_string(),
+        ));
+    }
+
+    let hidden_dim = layers[0].neurons.len();
+    let mut seen_ids = HashSet::new();
+
+    for (layer_index, layer) in layers.iter().enumerate() {
+        let expected_weights = if layer_index == 0 {
+            input_dim
+        } else {
+            hidden_dim
+        };
+
+        for neuron in &layer.neurons {
+            if !seen_ids.insert(neuron.id) {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "duplicate neuron id {}",
+                    neuron.id
+                )));
+            }
+            if neuron.weights.len() != expected_weights {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "neuron {} has {} weights, expected {}",
+                    neuron.id,
+                    neuron.weights.len(),
+                    expected_weights
+                )));
+            }
+            if neuron.weight_protection.len() != neuron.weights.len() {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "neuron {} has {} protection entries for {} weights",
+                    neuron.id,
+                    neuron.weight_protection.len(),
+                    neuron.weights.len()
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn apply_weight_updates(
