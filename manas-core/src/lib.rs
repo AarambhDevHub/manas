@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Core neural network engine for Manas.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod activation;
+pub mod error;
+pub mod layer;
+pub mod network;
+pub mod neuron;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use activation::Activation;
+pub use error::ManasError;
+pub use layer::Layer;
+pub use network::{
+    ConsolidationReport, ForwardCache, GUARD_DELTA, Network, NeuronGradients, TrainingExample,
+};
+pub use neuron::{Neuron, ProtectionLevel, Source};

@@ -4,6 +4,4 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-manas-core  = { path = "../manas-core" }
-manas-store = { path = "../manas-store" }
-rand = "0.8"
+manas-core = { path = "../manas-core" }

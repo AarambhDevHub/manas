@@ -14,6 +14,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 0 — Workspace and foundation.
 - Stage 1 — Associative memory proof.
 - Stage 2 — Anti-forgetting proof.
+- Stage 3 — Crate structure.
 
 ### Added
 
@@ -23,10 +24,15 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Protection levels in the standalone experiment: `Open`, `Guarded`, and `Frozen`.
 - Deterministic proof that five anchor facts survive after learning 50 unrelated
   facts, while new facts also retrieve above the required similarity threshold.
+- Promoted the proven Stage 1 and Stage 2 engine into maintained crates:
+  `manas-core` now owns activations, neurons, layers, networks, protection, and
+  errors; `manas-learn` now owns deterministic encoding, backpropagation,
+  training, and fixed anti-forgetting fixtures.
+- Added the `manas-learn` integration test for the Stage 3 anti-forgetting gate.
 
 ### Next
 
-- Stage 3 — Crate structure.
+- Stage 4 — Persistence: the `.manas` binary format.
 
 ---
 
