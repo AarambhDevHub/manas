@@ -15,6 +15,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 1 — Associative memory proof.
 - Stage 2 — Anti-forgetting proof.
 - Stage 3 — Crate structure.
+- Stage 4 — Persistence: the `.manas` binary format.
 
 ### Added
 
@@ -29,10 +30,14 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   errors; `manas-learn` now owns deterministic encoding, backpropagation,
   training, and fixed anti-forgetting fixtures.
 - Added the `manas-learn` integration test for the Stage 3 anti-forgetting gate.
+- Added `manas-store::ManasBrain` with std-only `.manas` save/load support for
+  the Stage 3 network state.
+- Added CRC32 verification, magic/version validation, protection metadata
+  persistence, and Stage 4 persistence integration tests.
 
 ### Next
 
-- Stage 4 — Persistence: the `.manas` binary format.
+- Stage 5 — Character n-gram tokenizer.
 
 ---
 

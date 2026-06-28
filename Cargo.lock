@@ -61,6 +61,7 @@ name = "manas-store"
 version = "0.1.0"
 dependencies = [
  "manas-core",
+ "manas-learn",
 ]
 
 [[package]]

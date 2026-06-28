@@ -5,3 +5,6 @@ edition.workspace = true
 
 [dependencies]
 manas-core = { path = "../manas-core" }
+
+[dev-dependencies]
+manas-learn = { path = "../manas-learn" }

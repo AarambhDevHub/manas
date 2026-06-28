@@ -72,8 +72,8 @@ from Stage 2 onward.**
 | Stage 1 | The engine — associative memory proof | Complete |
 | Stage 2 | Anti-forgetting proof | Complete |
 | Stage 3 | Crate structure | Complete |
-| Stage 4 | Persistence — `.manas` binary format | Next |
-| Stage 5 | Character n-gram tokenizer | Planned |
+| Stage 4 | Persistence — `.manas` binary format | Complete |
+| Stage 5 | Character n-gram tokenizer | Next |
 | Stage 6 | Positional embeddings | Planned |
 | Stage 7 | Growth system | Planned |
 | Stage 8 | Protection system hardened | Planned |
@@ -708,12 +708,24 @@ fn protection_levels_survive_save_load() {
 
 ### Done When
 
-- [ ] `brain_survives_save_and_load` passes
-- [ ] `checksum_catches_corruption` passes
-- [ ] `protection_levels_survive_save_load` passes
-- [ ] Magic bytes and version validated on load
-- [ ] File size grows predictably as neurons grow
-- [ ] `cargo test -p manas-store` passes clean
+- [x] `brain_survives_save_and_load` passes
+- [x] `checksum_catches_corruption` passes
+- [x] `protection_levels_survive_save_load` passes
+- [x] Magic bytes and version validated on load
+- [x] File size grows predictably as neurons grow
+- [x] `cargo test -p manas-store` passes clean
+
+Completion note:
+- Implemented `ManasBrain` in `manas-store/src/lib.rs` with `save`, `load`,
+  `exists`, and `size_bytes`
+- Added the Stage 4 `.manas` binary file path: `MANS` magic, version `2`,
+  header, empty vocab section, layer/neuron section, and CRC32 checksum
+- Persisted the current Stage 3 network state, including activations,
+  per-neuron protection, per-weight protection, bias protection, source
+  metadata, and freshness category
+- Added `manas-store/tests/persistence.rs` for save/load, checksum, magic,
+  version, protection, file-size, and consolidated-anchor persistence checks
+- Current proof result: `cargo test -p manas-store` passes
 
 ---
 

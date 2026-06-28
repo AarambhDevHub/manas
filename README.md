@@ -121,8 +121,8 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 1 | Associative memory proof | Complete |
 | Stage 2 | Anti-forgetting proof | Complete |
 | Stage 3 | Crate structure | Complete |
-| Stage 4 | `.manas` binary format | Next |
-| Stage 5 | Character n-gram tokenizer | Planned |
+| Stage 4 | `.manas` binary format | Complete |
+| Stage 5 | Character n-gram tokenizer | Next |
 | Stage 6 | Positional embeddings | Planned |
 | Stage 7 | Growth system | Planned |
 | Stage 8 | Protection system hardened | Planned |
@@ -133,6 +133,9 @@ Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
 maintained crate modules in `manas-core` and `manas-learn`, with the
 anti-forgetting gate covered by `manas-learn/tests/anti_forgetting.rs`.
+Stage 4 persists that network in one `.manas` binary file through
+`manas-store`; its vocab section is intentionally empty until the tokenizer
+stages add real vocab persistence.
 
 Run the proof:
 
@@ -152,6 +155,12 @@ Run the maintained crate proof:
 
 ```bash
 cargo test -p manas-learn anti_forgetting
+```
+
+Run the persistence proof:
+
+```bash
+cargo test -p manas-store
 ```
 
 See [ROADMAP.md](./ROADMAP.md) for the full plan with tests.
