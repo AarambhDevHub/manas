@@ -352,6 +352,9 @@ teach("paris is the capital of france")
 
 ### When a Layer Grows
 
+Real new-depth layer growth is a later milestone. Stage 7 widens the current
+hidden layer and keeps the engine in its proven two-layer shape.
+
 A new layer is added when:
 - All neurons in every layer are `Frozen` or `Guarded`
 - Loss is still above threshold after MAX_LAYER_ATTEMPTS
@@ -548,11 +551,16 @@ pub struct Network {
 }
 
 impl Network {
-    pub fn new() -> Self { ... }
+    pub fn new(input_dim: usize, hidden_dim: usize, output_dim: usize) -> Self { ... }
+    pub fn new_empty(embed_dim: usize) -> Self { ... }
     pub fn forward(&self, input: &[f32]) -> Vec<f32> { ... }
     pub fn forward_with_cache(&self, input: &[f32]) -> ForwardCache { ... }
     pub fn grow_neuron(&mut self, layer_id: u32, input_size: usize) -> Result<u64, ManasError> { ... }
-    pub fn grow_layer(&mut self, input_size: usize, neuron_count: usize) -> u32 { ... }
+    pub fn grow_layer(&mut self, input_size: usize, neuron_count: usize) -> Result<u32, ManasError> { ... }
+    pub fn neuron_count(&self) -> u64 { ... }
+    pub fn layer_count(&self) -> usize { ... }
+    pub fn open_neuron_count(&self) -> u64 { ... }
+    pub fn frozen_neuron_count(&self) -> u64 { ... }
     pub fn apply_gradients(&mut self, gradients: &[(u64, NeuronGradients)], lr: f32) { ... }
     pub fn recompute_next_id(&mut self) { ... }
 }

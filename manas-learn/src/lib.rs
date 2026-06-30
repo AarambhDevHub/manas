@@ -10,4 +10,4 @@ pub mod trainer;
 pub use embedder::Embedder;
 pub use encoder::Encoder;
 pub use tokenizer::Tokenizer;
-pub use trainer::{EncodedFact, Trainer};
+pub use trainer::{EncodedFact, LearnReport, Trainer};

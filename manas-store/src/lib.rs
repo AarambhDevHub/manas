@@ -285,7 +285,18 @@ fn validate_network_for_save(network: &Network) -> Result<(), ManasError> {
             "hidden dimension does not match hidden layer size".to_string(),
         ));
     }
-    if network.layers[1].neurons.len() != network.output_dim {
+    if network.layers[1].neurons.is_empty() {
+        if !network.layers[0].neurons.is_empty() {
+            return Err(ManasError::InvalidNetwork(
+                "non-empty hidden layer requires output neurons".to_string(),
+            ));
+        }
+        if network.output_dim != network.input_dim {
+            return Err(ManasError::InvalidNetwork(
+                "empty network output dimension must match input dimension".to_string(),
+            ));
+        }
+    } else if network.layers[1].neurons.len() != network.output_dim {
         return Err(ManasError::InvalidNetwork(
             "output dimension does not match output layer size".to_string(),
         ));
