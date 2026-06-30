@@ -74,8 +74,8 @@ from Stage 2 onward.**
 | Stage 3 | Crate structure | Complete |
 | Stage 4 | Persistence — `.manas` binary format | Complete |
 | Stage 5 | Character n-gram tokenizer | Complete |
-| Stage 6 | Positional embeddings | Next |
-| Stage 7 | Growth system | Planned |
+| Stage 6 | Positional embeddings | Complete |
+| Stage 7 | Growth system | Next |
 | Stage 8 | Protection system hardened | Planned |
 | Stage 9 | `manas-cli` v1 — teach and ask | Planned |
 | Stage 10 | File and folder ingestion | Planned |
@@ -874,18 +874,21 @@ pub struct Embedder {
 
 impl Embedder {
     pub fn new(embed_dim: usize) -> Self
+    pub fn with_seed(embed_dim: usize, seed: u64) -> Self
 
     pub fn get_or_create(&mut self, token_id: u32) -> &Vec<f32>
-    // if token_id not in table: initialize with small random values
+    // if token_id not in table: initialize with deterministic normalized values
 
     pub fn embed_with_position(&self, token_id: u32, position: usize) -> Vec<f32>
-    // embed[i] += positional_scale × sin(position / 10000^(2i/embed_dim))
-    // this encodes position into the embedding itself
+    // applies sinusoidal pair rotation plus positional modulation
 
     pub fn encode_sequence(&mut self, token_ids: &[u32]) -> Vec<f32>
     // embed each token with its position
     // sum all positioned embeddings → single Vec<f32> of length embed_dim
     // this is the input vector to the network
+
+    pub fn encode_existing_sequence(&self, token_ids: &[u32]) -> Vec<f32>
+    // same encoding path without mutating the embedding table
 }
 ```
 
@@ -942,11 +945,21 @@ fn similar_words_similar_vectors() {
 
 ### Done When
 
-- [ ] All embedding tests pass
-- [ ] Anti-forgetting test still passes end-to-end with tokenizer + embedder
-- [ ] Order sensitivity confirmed (same words, different order → different vectors)
-- [ ] Structural similarity confirmed (cat closer to cats than to dog)
-- [ ] `cargo test -p manas-learn embedder` passes clean
+- [x] All embedding tests pass
+- [x] Anti-forgetting test still passes end-to-end with tokenizer + embedder
+- [x] Order sensitivity confirmed (same words, different order → different vectors)
+- [x] Structural similarity confirmed (cat closer to cats than to dog)
+- [x] `cargo test -p manas-learn embedder` passes clean
+
+Completion note:
+- Implemented `Embedder` in `manas-learn/src/embedder.rs` with deterministic
+  normalized token vectors, sinusoidal pair rotation, and bounded positional
+  modulation
+- Refactored `Encoder` to compose `Tokenizer` + `Embedder` while preserving the
+  existing trainer-facing API and deterministic no-growth query path
+- Added embedder and encoder tests for order sensitivity, structural similarity,
+  deterministic sequence encoding, and no-growth deterministic encoding
+- Current proof result: `cargo test -p manas-learn embedder` passes
 
 ---
 

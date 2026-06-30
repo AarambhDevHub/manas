@@ -675,9 +675,12 @@ pub struct Embedder {
 
 impl Embedder {
     pub fn new(embed_dim: usize) -> Self { ... }
-    pub fn embed_with_position(&mut self, id: u32, position: usize) -> Vec<f32> { ... }
+    pub fn with_seed(embed_dim: usize, seed: u64) -> Self { ... }
+    pub fn get_or_create(&mut self, id: u32) -> &Vec<f32> { ... }
+    pub fn embed_with_position(&self, id: u32, position: usize) -> Vec<f32> { ... }
     pub fn encode_sequence(&mut self, ids: &[u32]) -> Vec<f32> { ... }
-    // positional encoding: embed[i] += sin(position / 10000^(2i/embed_dim))
+    pub fn encode_existing_sequence(&self, ids: &[u32]) -> Vec<f32> { ... }
+    // positional encoding: sinusoidal pair rotation + bounded modulation
 }
 ```
 
