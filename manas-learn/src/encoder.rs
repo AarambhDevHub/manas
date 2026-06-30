@@ -1,14 +1,11 @@
+use crate::tokenizer::Tokenizer;
+
 const DEFAULT_TABLE_SIZE: usize = 8192;
 
-#[derive(Clone)]
-enum EmbeddingSlot {
-    Empty,
-    Occupied { hash: u64, vector: Vec<f32> },
-}
-
-/// Deterministic hash-based encoder from the Stage 1-2 experiment.
+/// Deterministic tokenizer-backed encoder for Stage 5.
 pub struct Encoder {
-    slots: Vec<EmbeddingSlot>,
+    embeddings: Vec<Option<Vec<f32>>>,
+    tokenizer: Tokenizer,
     seed: u64,
     dim: usize,
 }
@@ -16,7 +13,8 @@ pub struct Encoder {
 impl Encoder {
     pub fn new(seed: u64, dim: usize, table_size: usize) -> Self {
         Self {
-            slots: vec![EmbeddingSlot::Empty; table_size],
+            embeddings: vec![None; table_size.max(1)],
+            tokenizer: Tokenizer::default(),
             seed,
             dim,
         }
@@ -27,11 +25,37 @@ impl Encoder {
     }
 
     pub fn encode(&mut self, text: &str) -> Vec<f32> {
+        let token_ids = self.tokenizer.encode(text);
+        self.encode_token_ids(&token_ids)
+    }
+
+    pub fn encode_deterministic(&self, text: &str) -> Vec<f32> {
+        let token_ids = self.tokenizer.encode_deterministic(text);
+        self.encode_token_ids_deterministic(&token_ids)
+    }
+
+    pub fn dim(&self) -> usize {
+        self.dim
+    }
+
+    pub fn vocab_size(&self) -> u32 {
+        self.tokenizer.vocab_size()
+    }
+
+    pub fn tokenizer(&self) -> &Tokenizer {
+        &self.tokenizer
+    }
+
+    pub fn tokenizer_mut(&mut self) -> &mut Tokenizer {
+        &mut self.tokenizer
+    }
+
+    fn encode_token_ids(&mut self, token_ids: &[u32]) -> Vec<f32> {
         let mut encoded = vec![0.0; self.dim];
 
-        for word in normalized_words(text) {
-            let word_vec = self.word_vector(&word);
-            for (dst, src) in encoded.iter_mut().zip(word_vec.iter()) {
+        for token_id in token_ids {
+            let token_vec = self.token_vector(*token_id);
+            for (dst, src) in encoded.iter_mut().zip(token_vec.iter()) {
                 *dst += src;
             }
         }
@@ -39,52 +63,45 @@ impl Encoder {
         encoded
     }
 
-    pub fn dim(&self) -> usize {
-        self.dim
-    }
+    fn encode_token_ids_deterministic(&self, token_ids: &[u32]) -> Vec<f32> {
+        let mut encoded = vec![0.0; self.dim];
 
-    fn word_vector(&mut self, word: &str) -> Vec<f32> {
-        let hash = stable_hash(word);
-        let mut index = hash as usize % self.slots.len();
-
-        loop {
-            match &self.slots[index] {
-                EmbeddingSlot::Occupied {
-                    hash: existing_hash,
-                    vector,
-                } if *existing_hash == hash => return vector.clone(),
-                EmbeddingSlot::Occupied { .. } => {
-                    index = (index + 1) % self.slots.len();
-                }
-                EmbeddingSlot::Empty => {
-                    let vector = make_embedding(hash ^ self.seed, self.dim);
-                    self.slots[index] = EmbeddingSlot::Occupied {
-                        hash,
-                        vector: vector.clone(),
-                    };
-                    return vector;
-                }
+        for token_id in token_ids {
+            let token_vec = self.existing_or_generated_token_vector(*token_id);
+            for (dst, src) in encoded.iter_mut().zip(token_vec.iter()) {
+                *dst += src;
             }
         }
+
+        encoded
+    }
+
+    fn token_vector(&mut self, token_id: u32) -> Vec<f32> {
+        let index = token_id as usize;
+        if index >= self.embeddings.len() {
+            self.embeddings.resize(index + 1, None);
+        }
+
+        if let Some(vector) = &self.embeddings[index] {
+            return vector.clone();
+        }
+
+        let vector = make_embedding(token_seed(self.seed, token_id), self.dim);
+        self.embeddings[index] = Some(vector.clone());
+        vector
+    }
+
+    fn existing_or_generated_token_vector(&self, token_id: u32) -> Vec<f32> {
+        self.embeddings
+            .get(token_id as usize)
+            .and_then(Option::as_ref)
+            .cloned()
+            .unwrap_or_else(|| make_embedding(token_seed(self.seed, token_id), self.dim))
     }
 }
 
-fn normalized_words(text: &str) -> Vec<String> {
-    text.split_whitespace()
-        .filter_map(|raw| {
-            let cleaned = raw
-                .chars()
-                .filter(|ch| ch.is_alphanumeric())
-                .flat_map(char::to_lowercase)
-                .collect::<String>();
-
-            if cleaned.is_empty() {
-                None
-            } else {
-                Some(cleaned)
-            }
-        })
-        .collect()
+fn token_seed(seed: u64, token_id: u32) -> u64 {
+    seed ^ u64::from(token_id)
 }
 
 fn make_embedding(seed: u64, dim: usize) -> Vec<f32> {
@@ -104,17 +121,6 @@ fn normalize_in_place(vector: &mut [f32]) {
             *value /= norm;
         }
     }
-}
-
-fn stable_hash(text: &str) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-
-    for byte in text.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-
-    splitmix64(hash)
 }
 
 struct SplitMix64 {
@@ -158,5 +164,29 @@ mod tests {
         let mut second = Encoder::new(42, 32, DEFAULT_TABLE_SIZE);
 
         assert_eq!(first.encode("cat"), second.encode("cat"));
+    }
+
+    #[test]
+    fn encoder_vocab_grows_through_encode() {
+        let mut encoder = Encoder::new(42, 32, DEFAULT_TABLE_SIZE);
+        let before = encoder.vocab_size();
+
+        encoder.encode("cat");
+
+        assert!(encoder.vocab_size() > before);
+    }
+
+    #[test]
+    fn deterministic_encode_does_not_grow_vocab() {
+        let mut encoder = Encoder::new(42, 32, DEFAULT_TABLE_SIZE);
+        encoder.encode("cat");
+        let before = encoder.vocab_size();
+
+        let known = encoder.encode_deterministic("cat");
+        let unknown = encoder.encode_deterministic("dog");
+
+        assert!(known.iter().any(|value| *value != 0.0));
+        assert!(unknown.iter().all(|value| *value == 0.0));
+        assert_eq!(encoder.vocab_size(), before);
     }
 }
