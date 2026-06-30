@@ -16,6 +16,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 2 — Anti-forgetting proof.
 - Stage 3 — Crate structure.
 - Stage 4 — Persistence: the `.manas` binary format.
+- Stage 5 — Character n-gram tokenizer.
 
 ### Added
 
@@ -34,10 +35,14 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Stage 3 network state.
 - Added CRC32 verification, magic/version validation, protection metadata
   persistence, and Stage 4 persistence integration tests.
+- Added a character prefix n-gram tokenizer in `manas-learn`, including
+  deterministic query encoding and tokenizer tests.
+- Replaced the Stage 3 word-hash encoder path with tokenizer-backed token ID
+  embeddings while keeping the anti-forgetting proof passing.
 
 ### Next
 
-- Stage 5 — Character n-gram tokenizer.
+- Stage 6 — Positional embeddings.
 
 ---
 

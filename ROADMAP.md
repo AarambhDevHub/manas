@@ -73,8 +73,8 @@ from Stage 2 onward.**
 | Stage 2 | Anti-forgetting proof | Complete |
 | Stage 3 | Crate structure | Complete |
 | Stage 4 | Persistence — `.manas` binary format | Complete |
-| Stage 5 | Character n-gram tokenizer | Next |
-| Stage 6 | Positional embeddings | Planned |
+| Stage 5 | Character n-gram tokenizer | Complete |
+| Stage 6 | Positional embeddings | Next |
 | Stage 7 | Growth system | Planned |
 | Stage 8 | Protection system hardened | Planned |
 | Stage 9 | `manas-cli` v1 — teach and ask | Planned |
@@ -838,11 +838,22 @@ fn decode_encode_roundtrip_reasonable() {
 
 ### Done When
 
-- [ ] All tokenizer tests pass
-- [ ] `cat_and_cats_share_tokens` confirms structural relationship
-- [ ] Anti-forgetting test from Stage 3 still passes with new tokenizer
-- [ ] Vocab grows correctly and deterministically
-- [ ] `cargo test -p manas-learn tokenizer` passes clean
+- [x] All tokenizer tests pass
+- [x] `cat_and_cats_share_tokens` confirms structural relationship
+- [x] Anti-forgetting test from Stage 3 still passes with new tokenizer
+- [x] Vocab grows correctly and deterministically
+- [x] `cargo test -p manas-learn tokenizer` passes clean
+
+Completion note:
+- Implemented `Tokenizer` in `manas-learn/src/tokenizer.rs` with character
+  prefix n-grams, boundary tokens, deterministic query encoding, decoding, and
+  vocab growth
+- Refactored `Encoder` to use tokenizer token IDs and deterministic token
+  embeddings while preserving the existing trainer API
+- Added tokenizer and encoder tests for structural sharing, deterministic
+  encoding, vocab growth, normalization, Unicode character handling, and
+  no-growth deterministic encoding
+- Current proof result: `cargo test -p manas-learn anti_forgetting` passes
 
 ---
 
