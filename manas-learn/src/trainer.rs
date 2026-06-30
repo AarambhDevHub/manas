@@ -1,6 +1,6 @@
-use manas_core::{ManasError, Network, TrainingExample};
+use manas_core::{GROWTH_THRESHOLD, MAX_UPDATE_ATTEMPTS, ManasError, Network, TrainingExample};
 
-use crate::backprop::{compute_gradients, cosine};
+use crate::backprop::{compute_gradients, cosine, mse_loss};
 use crate::encoder::Encoder;
 
 const DEFAULT_EMBED_TABLE_SIZE: usize = 8192;
@@ -14,10 +14,25 @@ pub struct EncodedFact {
     pub target: Vec<f32>,
 }
 
+/// Growth-aware result from a single Stage 7 learn call.
+#[derive(Clone, Debug)]
+pub struct LearnReport {
+    pub loss_before: f32,
+    pub loss_after: f32,
+    pub neurons_grown: u32,
+    pub layers_grown: u32,
+    pub neurons_promoted: u32,
+    pub neurons_frozen: u32,
+    pub total_neurons: u64,
+    pub update_applied: bool,
+}
+
 /// Minimal trainer for the proven associative-memory engine.
 pub struct Trainer {
     pub encoder: Encoder,
     pub learning_rate: f32,
+    pub growth_threshold: f32,
+    pub max_update_attempts: u32,
 }
 
 impl Trainer {
@@ -29,6 +44,8 @@ impl Trainer {
         Self {
             encoder: Encoder::new(seed, embed_dim, DEFAULT_EMBED_TABLE_SIZE),
             learning_rate,
+            growth_threshold: GROWTH_THRESHOLD,
+            max_update_attempts: MAX_UPDATE_ATTEMPTS,
         }
     }
 
@@ -56,6 +73,62 @@ impl Trainer {
     ) -> Result<f32, ManasError> {
         let fact = self.encode_fact(input, target);
         self.learn_fact(network, &fact)
+    }
+
+    pub fn learn(
+        &mut self,
+        network: &mut Network,
+        input: &str,
+        target: &str,
+    ) -> Result<LearnReport, ManasError> {
+        let fact = self.encode_fact(input, target);
+        let loss_before = loss_for_fact(network, &fact)?;
+        let mut loss_after = loss_before;
+        let mut neurons_grown = 0;
+        let mut update_applied = false;
+
+        if network.layers[0].neurons.is_empty() || network.layers[1].neurons.is_empty() {
+            grow_for_fact(network, &fact)?;
+            neurons_grown += 1;
+            update_applied = true;
+            loss_after = loss_for_fact(network, &fact)?;
+        }
+
+        if loss_after > self.growth_threshold {
+            for _ in 0..self.max_update_attempts {
+                let (_, gradients) = compute_gradients(network, &fact.input, &fact.target)?;
+                network.apply_gradients(&gradients, self.learning_rate)?;
+                update_applied = true;
+                loss_after = loss_for_fact(network, &fact)?;
+
+                if loss_after <= self.growth_threshold {
+                    break;
+                }
+            }
+
+            if loss_after > self.growth_threshold {
+                grow_for_fact(network, &fact)?;
+                neurons_grown += 1;
+                update_applied = true;
+                loss_after = loss_for_fact(network, &fact)?;
+            }
+        } else if !update_applied {
+            let (_, gradients) = compute_gradients(network, &fact.input, &fact.target)?;
+            network.apply_gradients(&gradients, self.learning_rate)?;
+            update_applied = true;
+            loss_after = loss_for_fact(network, &fact)?;
+        }
+
+        Ok(LearnReport {
+            loss_before,
+            loss_after,
+            neurons_grown,
+            layers_grown: 0,
+            neurons_promoted: 0,
+            neurons_frozen: network.frozen_neuron_count().min(u64::from(u32::MAX)) as u32,
+            total_neurons: network.neuron_count(),
+            update_applied,
+        })
     }
 
     pub fn learn_fact(&self, network: &mut Network, fact: &EncodedFact) -> Result<f32, ManasError> {
@@ -129,4 +202,88 @@ fn training_examples(facts: &[EncodedFact]) -> Vec<TrainingExample<'_>> {
             target: &fact.target,
         })
         .collect()
+}
+
+fn loss_for_fact(network: &Network, fact: &EncodedFact) -> Result<f32, ManasError> {
+    mse_loss(&network.forward(&fact.input), &fact.target)
+}
+
+fn grow_for_fact(network: &mut Network, fact: &EncodedFact) -> Result<(), ManasError> {
+    let neuron_id = network.grow_neuron(0, fact.input.len())?;
+    network.key_hidden_neuron_to_input(neuron_id, &fact.input)?;
+    network.fit_open_output_weights_to_facts(
+        &[TrainingExample {
+            input: &fact.input,
+            target: &fact.target,
+        }],
+        &[],
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn growth_trainer_learn_grows_empty_network() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        let report = trainer.learn(&mut network, "cat", "animal").unwrap();
+
+        assert!(report.neurons_grown > 0);
+        assert!(network.neuron_count() > 0);
+        assert!(report.loss_after < report.loss_before);
+        assert!(report.update_applied);
+    }
+
+    #[test]
+    fn growth_repeated_teaching_does_not_explode_neurons() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        for _ in 0..100 {
+            trainer.learn(&mut network, "cat", "animal").unwrap();
+        }
+        let count_after_100 = network.neuron_count();
+
+        for _ in 0..100 {
+            trainer.learn(&mut network, "cat", "animal").unwrap();
+        }
+
+        assert_eq!(network.neuron_count(), count_after_100);
+    }
+
+    #[test]
+    fn growth_new_fact_grows_neuron_if_needed() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        for _ in 0..100 {
+            trainer.learn(&mut network, "cat", "animal").unwrap();
+        }
+        let neurons_after_cat = network.neuron_count();
+
+        for _ in 0..10 {
+            trainer
+                .learn(&mut network, "eiffel tower", "paris france")
+                .unwrap();
+        }
+
+        assert!(network.neuron_count() >= neurons_after_cat);
+    }
+
+    #[test]
+    fn growth_learn_report_records_growth_and_loss() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        let report = trainer.learn(&mut network, "rust", "language").unwrap();
+
+        assert_eq!(report.layers_grown, 0);
+        assert_eq!(report.neurons_promoted, 0);
+        assert_eq!(report.neurons_frozen, 0);
+        assert_eq!(report.total_neurons, network.neuron_count());
+        assert!(report.loss_before >= report.loss_after);
+    }
 }

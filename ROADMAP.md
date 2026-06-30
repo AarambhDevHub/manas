@@ -75,8 +75,8 @@ from Stage 2 onward.**
 | Stage 4 | Persistence — `.manas` binary format | Complete |
 | Stage 5 | Character n-gram tokenizer | Complete |
 | Stage 6 | Positional embeddings | Complete |
-| Stage 7 | Growth system | Next |
-| Stage 8 | Protection system hardened | Planned |
+| Stage 7 | Growth system | Complete |
+| Stage 8 | Protection system hardened | Next |
 | Stage 9 | `manas-cli` v1 — teach and ask | Planned |
 | Stage 10 | File and folder ingestion | Planned |
 | Stage 11 | Importance scoring and promotion | Planned |
@@ -980,14 +980,18 @@ pub const MAX_LAYERS: usize = 16;
 pub const GUARD_DELTA: f32 = 0.001;
 
 impl Network {
+    pub fn new_empty(embed_dim: usize) -> Self
+    // starts with two empty layers and zero neurons
+
     pub fn grow_neuron(&mut self, layer_id: u32, input_size: usize)
         -> Result<u64, ManasError>
-    // add one new Open neuron to layer_id
+    // add one new Open hidden neuron to layer_id 0
     // return new neuron's ID
 
-    pub fn grow_layer(&mut self, input_size: usize, neuron_count: usize) -> u32
-    // add a new layer with neuron_count Open neurons
-    // return new layer's ID
+    pub fn grow_layer(&mut self, input_size: usize, neuron_count: usize)
+        -> Result<u32, ManasError>
+    // Stage 7 compatibility: widens hidden layer 0
+    // real new-depth layer growth is Stage 17
 
     pub fn neuron_count(&self) -> u64
     pub fn layer_count(&self) -> usize
@@ -1117,12 +1121,24 @@ fn growth_respects_max_neurons_per_layer() {
 
 ### Done When
 
-- [ ] `network_starts_empty_and_grows` passes
-- [ ] `repeated_teaching_does_not_explode_neurons` passes
-- [ ] `new_fact_grows_neuron_if_needed` passes
-- [ ] `growth_respects_max_neurons_per_layer` passes
-- [ ] Anti-forgetting test from Stage 3 still passes with growth system active
-- [ ] `cargo test -p manas-core growth` passes clean
+- [x] `network_starts_empty_and_grows` passes
+- [x] `repeated_teaching_does_not_explode_neurons` passes
+- [x] `new_fact_grows_neuron_if_needed` passes
+- [x] `growth_respects_max_neurons_per_layer` passes
+- [x] Anti-forgetting test from Stage 3 still passes with growth system active
+- [x] `cargo test -p manas-core growth` passes clean
+
+Completion note:
+- Added bounded Stage 7 hidden-neuron growth in `manas-core` with
+  `Network::new_empty`, `grow_neuron`, count helpers, and exported growth
+  constants
+- Added growth-aware `Trainer::learn` and `LearnReport` while preserving the
+  existing Stage 3 anti-forgetting training path
+- Updated persistence validation so empty and grown-from-empty two-layer
+  networks save and load without changing the `.manas` format
+- Current proof results: `cargo test -p manas-core growth`,
+  `cargo test -p manas-learn growth`, and
+  `cargo test -p manas-learn anti_forgetting` pass
 
 ---
 

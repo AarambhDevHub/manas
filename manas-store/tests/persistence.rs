@@ -173,6 +173,45 @@ fn file_size_tracks_network_shape() {
 }
 
 #[test]
+fn empty_network_survives_save_and_load() {
+    let path = temp_path("empty");
+    let network = Network::new_empty(32);
+    let brain = ManasBrain::new(&path);
+
+    brain.save(&network).unwrap();
+    let loaded = brain.load().unwrap();
+
+    assert_eq!(loaded.neuron_count(), 0);
+    assert_eq!(loaded.layer_count(), 2);
+    assert_eq!(loaded.input_dim, 32);
+    assert_eq!(loaded.output_dim, 32);
+    assert_eq!(loaded.forward(&[0.1; 32]), vec![0.0; 32]);
+
+    cleanup(&path);
+}
+
+#[test]
+fn grown_empty_network_survives_save_and_load() {
+    let path = temp_path("grown-empty");
+    let mut network = Network::new_empty(32);
+    network.grow_neuron(0, 32).unwrap();
+    network.grow_neuron(0, 32).unwrap();
+    let expected_output = network.forward(&[0.1; 32]);
+    let brain = ManasBrain::new(&path);
+
+    brain.save(&network).unwrap();
+    let loaded = brain.load().unwrap();
+
+    assert_eq!(loaded.neuron_count(), network.neuron_count());
+    assert_eq!(loaded.layers[0].neurons.len(), 2);
+    assert_eq!(loaded.layers[1].neurons.len(), 32);
+    assert_eq!(loaded.layers[1].neurons[0].weights.len(), 2);
+    assert_eq!(loaded.forward(&[0.1; 32]), expected_output);
+
+    cleanup(&path);
+}
+
+#[test]
 fn anchor_consolidated_network_survives_save_load() {
     let path = temp_path("anchors");
     let mut trainer = Trainer::with_seed(42, EMBED_DIM, LEARNING_RATE);
