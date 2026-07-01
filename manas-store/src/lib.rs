@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,13 +16,34 @@ pub struct ManasBrain {
     pub path: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+pub struct BrainState {
+    pub network: Network,
+    pub vocab_entries: Vec<VocabEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VocabEntry {
+    pub token: String,
+    pub id: u32,
+    pub embedding: Vec<f32>,
+}
+
 impl ManasBrain {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
 
     pub fn save(&self, network: &Network) -> Result<(), ManasError> {
-        let bytes = encode_network(network)?;
+        let bytes = encode_state(network, &[])?;
+        fs::write(&self.path, bytes).map_err(|source| ManasError::FileWriteError {
+            path: self.path.clone(),
+            source,
+        })
+    }
+
+    pub fn save_state(&self, state: &BrainState) -> Result<(), ManasError> {
+        let bytes = encode_state(&state.network, &state.vocab_entries)?;
         fs::write(&self.path, bytes).map_err(|source| ManasError::FileWriteError {
             path: self.path.clone(),
             source,
@@ -29,12 +51,16 @@ impl ManasBrain {
     }
 
     pub fn load(&self) -> Result<Network, ManasError> {
+        Ok(self.load_state()?.network)
+    }
+
+    pub fn load_state(&self) -> Result<BrainState, ManasError> {
         let bytes = fs::read(&self.path).map_err(|source| ManasError::FileReadError {
             path: self.path.clone(),
             source,
         })?;
 
-        decode_network(&bytes)
+        decode_state(&bytes)
     }
 
     pub fn exists(&self) -> bool {
@@ -48,8 +74,9 @@ impl ManasBrain {
     }
 }
 
-fn encode_network(network: &Network) -> Result<Vec<u8>, ManasError> {
+fn encode_state(network: &Network, vocab_entries: &[VocabEntry]) -> Result<Vec<u8>, ManasError> {
     validate_network_for_save(network)?;
+    let vocab_size = validate_vocab_entries(vocab_entries, network.input_dim)?;
 
     let mut bytes = Vec::new();
     bytes.extend_from_slice(MAGIC);
@@ -65,9 +92,9 @@ fn encode_network(network: &Network) -> Result<Vec<u8>, ManasError> {
         &mut bytes,
         usize_to_u32(network.input_dim, "input dimension")?,
     );
-    write_u32(&mut bytes, 0);
+    write_u32(&mut bytes, vocab_size);
 
-    write_u32(&mut bytes, 0);
+    write_vocab(&mut bytes, vocab_entries)?;
     write_layers(&mut bytes, &network.layers)?;
 
     let checksum = crc32(&bytes);
@@ -76,7 +103,7 @@ fn encode_network(network: &Network) -> Result<Vec<u8>, ManasError> {
     Ok(bytes)
 }
 
-fn decode_network(bytes: &[u8]) -> Result<Network, ManasError> {
+fn decode_state(bytes: &[u8]) -> Result<BrainState, ManasError> {
     if bytes.len() < MAGIC.len() + 1 + CRC_SIZE {
         return corrupt("file is too short");
     }
@@ -105,10 +132,7 @@ fn decode_network(bytes: &[u8]) -> Result<Network, ManasError> {
     let expected_layer_count = reader.read_u32()?;
     let input_dim = u32_to_usize(reader.read_u32()?, "input dimension")?;
     let vocab_size = reader.read_u32()?;
-    let vocab_entry_count = reader.read_u32()?;
-    if vocab_size != 0 || vocab_entry_count != 0 {
-        return corrupt("Stage 4 only supports empty vocab sections");
-    }
+    let vocab_entries = read_vocab(&mut reader, vocab_size, input_dim)?;
 
     let layers = read_layers(&mut reader, expected_layer_count)?;
     reader.finish()?;
@@ -122,7 +146,89 @@ fn decode_network(bytes: &[u8]) -> Result<Network, ManasError> {
         ));
     }
 
-    Ok(network)
+    Ok(BrainState {
+        network,
+        vocab_entries,
+    })
+}
+
+fn write_vocab(bytes: &mut Vec<u8>, entries: &[VocabEntry]) -> Result<(), ManasError> {
+    let mut sorted_entries = entries.iter().collect::<Vec<_>>();
+    sorted_entries.sort_by_key(|entry| entry.id);
+
+    write_u32(
+        bytes,
+        usize_to_u32(sorted_entries.len(), "vocab entry count")?,
+    );
+    for entry in sorted_entries {
+        let token_bytes = entry.token.as_bytes();
+        write_u16(
+            bytes,
+            usize_to_u16(token_bytes.len(), "vocab token length")?,
+        );
+        bytes.extend_from_slice(token_bytes);
+        write_u32(bytes, entry.id);
+        for value in &entry.embedding {
+            write_f32(bytes, *value);
+        }
+    }
+
+    Ok(())
+}
+
+fn read_vocab(
+    reader: &mut Reader<'_>,
+    vocab_size: u32,
+    embed_dim: usize,
+) -> Result<Vec<VocabEntry>, ManasError> {
+    let entry_count = reader.read_u32()?;
+    if vocab_size == 0 && entry_count != 0 {
+        return corrupt("vocab entries present with zero vocab size");
+    }
+    if entry_count > vocab_size {
+        return corrupt(format!(
+            "vocab entry count {entry_count} exceeds vocab size {vocab_size}"
+        ));
+    }
+
+    let mut seen_tokens = HashSet::new();
+    let mut seen_ids = HashSet::new();
+    let mut entries = Vec::with_capacity(u32_to_usize(entry_count, "vocab entry count")?);
+
+    for _ in 0..entry_count {
+        let token_len = reader.read_u16()? as usize;
+        let token_bytes = reader.read_bytes(token_len)?;
+        let token = std::str::from_utf8(token_bytes)
+            .map_err(|_| corrupt_error("vocab token is not valid UTF-8"))?
+            .to_string();
+        let id = reader.read_u32()?;
+
+        if token.is_empty() {
+            return corrupt("vocab token cannot be empty");
+        }
+        if id >= vocab_size {
+            return corrupt(format!("vocab id {id} exceeds vocab size {vocab_size}"));
+        }
+        if !seen_tokens.insert(token.clone()) {
+            return corrupt(format!("duplicate vocab token '{token}'"));
+        }
+        if !seen_ids.insert(id) {
+            return corrupt(format!("duplicate vocab id {id}"));
+        }
+
+        let mut embedding = Vec::with_capacity(embed_dim);
+        for _ in 0..embed_dim {
+            embedding.push(reader.read_f32()?);
+        }
+
+        entries.push(VocabEntry {
+            token,
+            id,
+            embedding,
+        });
+    }
+
+    Ok(entries)
 }
 
 fn write_layers(bytes: &mut Vec<u8>, layers: &[Layer]) -> Result<(), ManasError> {
@@ -271,6 +377,45 @@ fn read_source(reader: &mut Reader<'_>) -> Result<Source, ManasError> {
         2 => corrupt("unknown source cannot contain source bytes"),
         _ => corrupt(format!("invalid source tag {tag}")),
     }
+}
+
+fn validate_vocab_entries(entries: &[VocabEntry], embed_dim: usize) -> Result<u32, ManasError> {
+    let mut seen_tokens = HashSet::new();
+    let mut seen_ids = HashSet::new();
+    let mut max_id = None;
+
+    for entry in entries {
+        if entry.token.is_empty() {
+            return Err(ManasError::InvalidNetwork(
+                "vocab token cannot be empty".to_string(),
+            ));
+        }
+        usize_to_u16(entry.token.len(), "vocab token length")?;
+        if entry.embedding.len() != embed_dim {
+            return Err(ManasError::InvalidNetwork(format!(
+                "embedding for token '{}' has dimension {}, expected {}",
+                entry.token,
+                entry.embedding.len(),
+                embed_dim
+            )));
+        }
+        if !seen_tokens.insert(entry.token.clone()) {
+            return Err(ManasError::InvalidNetwork(format!(
+                "duplicate vocab token '{}'",
+                entry.token
+            )));
+        }
+        if !seen_ids.insert(entry.id) {
+            return Err(ManasError::InvalidNetwork(format!(
+                "duplicate vocab id {}",
+                entry.id
+            )));
+        }
+        max_id = Some(max_id.map_or(entry.id, |current: u32| current.max(entry.id)));
+    }
+
+    usize_to_u32(entries.len(), "vocab entry count")?;
+    Ok(max_id.map_or(0, |id| id.saturating_add(1)))
 }
 
 fn validate_network_for_save(network: &Network) -> Result<(), ManasError> {

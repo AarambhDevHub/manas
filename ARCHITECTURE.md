@@ -837,18 +837,22 @@ pub fn normalize(text: &str) -> String { ... }
 User-facing commands. Thin layer over the learning engine.
 **All business logic lives in the crates above. The CLI only routes and formats.**
 
-**Dependencies:** all crates above, `clap`
+**Dependencies:** all crates above. Stage 9 uses std-only argument parsing;
+external CLI parsing can be added later if needed.
 
 #### Commands
 
 ```
-manas teach <INPUT>       Teach a fact, file, or folder
+manas teach <INPUT>       Teach a raw text fact in Stage 9
 manas ask "<QUESTION>"    Ask a question — answered from neural weights
 manas inspect             Show brain state, neuron count, protection levels
 manas neurons             List all neurons with their importance scores
 manas forget              Compress low-importance neurons to save space
 manas reset               Delete the brain and start fresh
 ```
+
+File and folder inputs for `teach` are Stage 10. `neurons` and `forget` are
+later milestones.
 
 #### `manas teach` Output Format
 

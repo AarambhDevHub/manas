@@ -308,6 +308,14 @@ impl Network {
             .count() as u64
     }
 
+    pub fn guarded_neuron_count(&self) -> u64 {
+        self.layers
+            .iter()
+            .flat_map(|layer| layer.neurons.iter())
+            .filter(|neuron| matches!(neuron.protection_level, ProtectionLevel::Guarded))
+            .count() as u64
+    }
+
     pub fn key_hidden_neuron_to_input(
         &mut self,
         neuron_id: u64,
@@ -973,10 +981,12 @@ mod tests {
         let total = network.neuron_count();
 
         network.layers[0].neurons[0].freeze_all();
+        network.layers[0].neurons[1].guard_all();
 
         assert_eq!(network.neuron_count(), total);
         assert_eq!(network.frozen_neuron_count(), 1);
-        assert_eq!(network.open_neuron_count(), total - 1);
+        assert_eq!(network.guarded_neuron_count(), 1);
+        assert_eq!(network.open_neuron_count(), total - 2);
     }
 
     #[test]

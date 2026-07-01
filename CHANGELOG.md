@@ -20,6 +20,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 6 — Positional embeddings.
 - Stage 7 — Growth system.
 - Stage 8 — Protection system hardened.
+- Stage 9 — `manas-cli` v1: teach and ask.
 
 ### Added
 
@@ -48,10 +49,13 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Hardened protection enforcement with monotonic protection strengthening,
   trainer-level promotion, transition reporting, and stress tests for frozen,
   guarded, open, promoted, and persisted protection states.
+- Added the first usable CLI loop with raw-text `teach`, neural-weight `ask`,
+  `inspect`, `reset`, restart-safe vocab persistence in `brain.manas`, and
+  CLI integration tests.
 
 ### Next
 
-- Stage 9 — `manas-cli` v1: teach and ask.
+- Stage 10 — File and folder ingestion.
 
 ---
 

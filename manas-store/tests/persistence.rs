@@ -8,7 +8,7 @@ use manas_learn::fixtures::{
     LEARNING_RATE, OUTPUT_DIM,
 };
 use manas_learn::{EncodedFact, Trainer};
-use manas_store::ManasBrain;
+use manas_store::{BrainState, ManasBrain, VocabEntry};
 
 const CRC32_POLYNOMIAL: u32 = 0xEDB8_8320;
 
@@ -110,6 +110,37 @@ fn protection_levels_survive_save_load() {
             path: "notes/facts.md".to_string()
         }
     );
+
+    cleanup(&path);
+}
+
+#[test]
+fn vocab_entries_survive_save_load() {
+    let path = temp_path("vocab");
+    let network = Network::new_empty(32);
+    let vocab_entries = vec![
+        VocabEntry {
+            token: "cat".to_string(),
+            id: 0,
+            embedding: vec![0.1; 32],
+        },
+        VocabEntry {
+            token: "#cat".to_string(),
+            id: 1,
+            embedding: vec![0.2; 32],
+        },
+    ];
+    let state = BrainState {
+        network,
+        vocab_entries: vocab_entries.clone(),
+    };
+
+    let brain = ManasBrain::new(&path);
+    brain.save_state(&state).unwrap();
+    let loaded = brain.load_state().unwrap();
+
+    assert_eq!(loaded.vocab_entries, vocab_entries);
+    assert_eq!(loaded.network.input_dim, 32);
 
     cleanup(&path);
 }
