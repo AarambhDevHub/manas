@@ -3,6 +3,7 @@ use manas_core::{
 };
 
 use crate::backprop::{compute_gradients, cosine, mse_loss};
+use crate::decoder::decode_answer;
 use crate::encoder::Encoder;
 
 const DEFAULT_EMBED_TABLE_SIZE: usize = 8192;
@@ -23,6 +24,19 @@ pub struct EncodedFact {
 pub struct ProtectionReport {
     pub neurons_promoted: u32,
     pub neurons_frozen: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AnswerSource {
+    NeuralWeights,
+    NotEnough,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueryResult {
+    pub answer: String,
+    pub confidence: f32,
+    pub answered_from: AnswerSource,
 }
 
 /// Growth-aware result from a single learn call.
@@ -230,6 +244,23 @@ impl Trainer {
         network.forward(input)
     }
 
+    pub fn query(&self, network: &Network, question: &str) -> Result<QueryResult, ManasError> {
+        let input = self.encoder.encode_deterministic(question);
+        if input.iter().all(|value| value.abs() <= f32::EPSILON) || network.neuron_count() == 0 {
+            return Ok(not_enough());
+        }
+
+        let output = network.forward(&input);
+        Ok(match decode_answer(&output, &self.encoder, question) {
+            Some(decoded) => QueryResult {
+                answer: decoded.answer,
+                confidence: decoded.confidence,
+                answered_from: AnswerSource::NeuralWeights,
+            },
+            None => not_enough(),
+        })
+    }
+
     pub fn similarity_for_fact(&self, network: &Network, fact: &EncodedFact) -> f32 {
         cosine(&network.forward(&fact.input), &fact.target)
     }
@@ -252,6 +283,14 @@ fn training_examples(facts: &[EncodedFact]) -> Vec<TrainingExample<'_>> {
 
 fn loss_for_fact(network: &Network, fact: &EncodedFact) -> Result<f32, ManasError> {
     mse_loss(&network.forward(&fact.input), &fact.target)
+}
+
+fn not_enough() -> QueryResult {
+    QueryResult {
+        answer: "Not enough knowledge yet.".to_string(),
+        confidence: 0.0,
+        answered_from: AnswerSource::NotEnough,
+    }
 }
 
 fn grow_for_fact(network: &mut Network, fact: &EncodedFact) -> Result<(), ManasError> {
@@ -447,5 +486,40 @@ mod tests {
             network.layers[0].neurons[1].protection_level,
             ProtectionLevel::Frozen
         );
+    }
+
+    #[test]
+    fn query_returns_neural_weights_for_learned_fact() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn(&mut network, "cat", "small animal with fur")
+            .unwrap();
+
+        let result = trainer.query(&network, "What is a cat?").unwrap();
+
+        assert_eq!(result.answered_from, AnswerSource::NeuralWeights);
+        assert!(result.confidence > 0.0);
+        assert!(
+            result.answer.contains("animal") || result.answer.contains("fur"),
+            "answer was '{}'",
+            result.answer
+        );
+    }
+
+    #[test]
+    fn query_returns_not_enough_for_unknown_question() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn(&mut network, "cat", "small animal with fur")
+            .unwrap();
+
+        let result = trainer.query(&network, "quasar").unwrap();
+
+        assert_eq!(result.answered_from, AnswerSource::NotEnough);
+        assert_eq!(result.confidence, 0.0);
     }
 }

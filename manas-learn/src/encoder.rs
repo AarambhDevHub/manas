@@ -1,3 +1,7 @@
+use std::collections::{HashMap, HashSet};
+
+use manas_core::ManasError;
+
 use crate::embedder::Embedder;
 use crate::tokenizer::Tokenizer;
 
@@ -7,6 +11,14 @@ const DEFAULT_TABLE_SIZE: usize = 8192;
 pub struct Encoder {
     tokenizer: Tokenizer,
     embedder: Embedder,
+}
+
+/// Persistable tokenizer/embedding entry used by the Stage 9 CLI brain state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EncoderVocabEntry {
+    pub token: String,
+    pub id: u32,
+    pub embedding: Vec<f32>,
 }
 
 impl Encoder {
@@ -37,6 +49,82 @@ impl Encoder {
 
     pub fn vocab_size(&self) -> u32 {
         self.tokenizer.vocab_size()
+    }
+
+    pub fn export_vocab(&self) -> Vec<EncoderVocabEntry> {
+        let mut entries = self
+            .tokenizer
+            .id_to_token
+            .iter()
+            .map(|(id, token)| EncoderVocabEntry {
+                token: token.clone(),
+                id: *id,
+                embedding: self.embedder.base_embedding(*id),
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.id);
+        entries
+    }
+
+    pub fn import_vocab(&mut self, entries: &[EncoderVocabEntry]) -> Result<(), ManasError> {
+        let mut seen_tokens = HashSet::new();
+        let mut seen_ids = HashSet::new();
+        let mut vocab = HashMap::with_capacity(entries.len());
+        let mut id_to_token = HashMap::with_capacity(entries.len());
+        let mut embed_table = HashMap::with_capacity(entries.len());
+        let mut next_id = 0_u32;
+
+        for entry in entries {
+            if entry.token.is_empty() {
+                return Err(ManasError::EncodingError(
+                    "vocab entry token cannot be empty".to_string(),
+                ));
+            }
+            if entry.embedding.len() != self.dim() {
+                return Err(ManasError::EncodingError(format!(
+                    "embedding for token '{}' has dimension {}, expected {}",
+                    entry.token,
+                    entry.embedding.len(),
+                    self.dim()
+                )));
+            }
+            if !seen_tokens.insert(entry.token.clone()) {
+                return Err(ManasError::EncodingError(format!(
+                    "duplicate vocab token '{}'",
+                    entry.token
+                )));
+            }
+            if !seen_ids.insert(entry.id) {
+                return Err(ManasError::EncodingError(format!(
+                    "duplicate vocab id {}",
+                    entry.id
+                )));
+            }
+
+            vocab.insert(entry.token.clone(), entry.id);
+            id_to_token.insert(entry.id, entry.token.clone());
+            embed_table.insert(entry.id, entry.embedding.clone());
+            next_id = next_id.max(entry.id.saturating_add(1));
+        }
+
+        self.tokenizer.vocab = vocab;
+        self.tokenizer.id_to_token = id_to_token;
+        self.tokenizer.next_id = next_id;
+        self.embedder.embed_table = embed_table;
+        Ok(())
+    }
+
+    pub fn known_words(&self) -> Vec<String> {
+        let mut words = self
+            .tokenizer
+            .id_to_token
+            .values()
+            .filter_map(|token| token.strip_prefix('#'))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        words.sort();
+        words.dedup();
+        words
     }
 
     pub fn tokenizer(&self) -> &Tokenizer {
@@ -102,5 +190,23 @@ mod tests {
         let dog_cat = encoder.encode("dog cat");
 
         assert_ne!(cat_dog, dog_cat);
+    }
+
+    #[test]
+    fn encoder_vocab_export_import_preserves_vectors() {
+        let mut original = Encoder::new(42, 32, DEFAULT_TABLE_SIZE);
+        let original_cat = original.encode("cat");
+        original.encode("small animal with fur");
+        let entries = original.export_vocab();
+
+        let mut loaded = Encoder::new(42, 32, DEFAULT_TABLE_SIZE);
+        loaded.import_vocab(&entries).unwrap();
+
+        assert_eq!(loaded.vocab_size(), original.vocab_size());
+        assert_eq!(loaded.encode_deterministic("cat"), original_cat);
+        assert_eq!(
+            loaded.encode_deterministic("small animal"),
+            original.encode_deterministic("small animal")
+        );
     }
 }

@@ -126,23 +126,25 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 6 | Positional embeddings | Complete |
 | Stage 7 | Growth system | Complete |
 | Stage 8 | Protection system hardened | Complete |
-| Stage 9 | `manas teach` and `manas ask` | Next |
-| Stage 10+ | File ingestion, inspect, benchmarks, layer growth | Planned |
+| Stage 9 | `manas teach` and `manas ask` | Complete |
+| Stage 10 | File and folder ingestion | Next |
+| Stage 11+ | Importance, freshness, benchmarks, layer growth | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
 maintained crate modules in `manas-core` and `manas-learn`, with the
 anti-forgetting gate covered by `manas-learn/tests/anti_forgetting.rs`.
 Stage 4 persists that network in one `.manas` binary file through
-`manas-store`; its vocab section is intentionally empty until the tokenizer
-stages add real vocab persistence. Stage 5 replaces the word-hash encoder path
+`manas-store`; Stage 9 stores tokenizer and embedding vocab data in that same
+file so questions can be answered after restart. Stage 5 replaces the word-hash encoder path
 with a character prefix n-gram tokenizer. Stage 6 adds positional embeddings so
 the encoder preserves token order while keeping the same fixed-width vector
 interface and anti-forgetting proof. Stage 7 adds bounded hidden-neuron growth
 so a brain can start empty and gain capacity only when learning needs it. Stage 8
 hardens protection so frozen neurons cannot change, guarded neurons are clamped,
 protection survives save/load, and frequently updated neurons promote
-automatically during learning.
+automatically during learning. Stage 9 connects the CLI to learning, querying,
+inspection, reset, and restart-safe `.manas` persistence for raw text facts.
 
 Run the proof:
 
@@ -195,6 +197,13 @@ Run the protection proof:
 cargo test -p manas-core protection
 cargo test -p manas-learn protection
 cargo test -p manas-store protection
+```
+
+Run the CLI proof:
+
+```bash
+cargo test -p manas-cli
+cargo test -p manas-learn query
 ```
 
 See [ROADMAP.md](./ROADMAP.md) for the full plan with tests.

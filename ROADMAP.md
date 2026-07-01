@@ -77,8 +77,8 @@ from Stage 2 onward.**
 | Stage 6 | Positional embeddings | Complete |
 | Stage 7 | Growth system | Complete |
 | Stage 8 | Protection system hardened | Complete |
-| Stage 9 | `manas-cli` v1 — teach and ask | Next |
-| Stage 10 | File and folder ingestion | Planned |
+| Stage 9 | `manas-cli` v1 — teach and ask | Complete |
+| Stage 10 | File and folder ingestion | Next |
 | Stage 11 | Importance scoring and promotion | Planned |
 | Stage 12 | Freshness system | Planned |
 | Stage 13 | The real demo | Planned |
@@ -1354,12 +1354,25 @@ Answered from: neural weights
 
 ### Done When
 
-- [ ] `manas teach` works for raw text
-- [ ] `manas ask` answers from neural weights
-- [ ] Sidecar test passes — no text files needed
-- [ ] Brain persists across restart
-- [ ] `manas inspect` shows neuron count, layer count, protection stats
-- [ ] `manas reset` deletes brain and starts fresh
+- [x] `manas teach` works for raw text
+- [x] `manas ask` answers from neural weights
+- [x] Sidecar test passes — no text files needed
+- [x] Brain persists across restart
+- [x] `manas inspect` shows neuron count, layer count, protection stats
+- [x] `manas reset` deletes brain and starts fresh
+
+Completion note:
+- Replaced the placeholder CLI with std-only command routing for `teach`,
+  `ask`, `inspect`, `reset`, and help
+- Added restart-safe `BrainState` persistence so network weights, tokenizer
+  vocab, and embedding vectors all live in `brain.manas`
+- Added `Trainer::query`, `QueryResult`, and a vector decoder that answers from
+  neural output activations using persisted embeddings
+- Added CLI integration tests that teach in one process and ask in a later
+  process after sidecar deletion
+- Current proof results: `cargo test -p manas-cli`,
+  `cargo test -p manas-learn query`, `cargo test -p manas-store`, and
+  `cargo test -p manas-learn anti_forgetting` pass
 
 ---
 

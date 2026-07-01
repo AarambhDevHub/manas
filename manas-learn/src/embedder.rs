@@ -39,6 +39,13 @@ impl Embedder {
             .or_insert_with(|| make_embedding(token_seed(seed, token_id), embed_dim))
     }
 
+    pub fn base_embedding(&self, token_id: u32) -> Vec<f32> {
+        self.embed_table
+            .get(&token_id)
+            .cloned()
+            .unwrap_or_else(|| make_embedding(token_seed(self.seed, token_id), self.embed_dim))
+    }
+
     pub fn embed_with_position(&self, token_id: u32, position: usize) -> Vec<f32> {
         match self.embed_table.get(&token_id) {
             Some(base) => positioned_embedding(base, position, self.positional_scale),
