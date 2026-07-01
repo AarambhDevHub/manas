@@ -1,9 +1,13 @@
-use manas_core::{GROWTH_THRESHOLD, MAX_UPDATE_ATTEMPTS, ManasError, Network, TrainingExample};
+use manas_core::{
+    GROWTH_THRESHOLD, MAX_UPDATE_ATTEMPTS, ManasError, Network, ProtectionLevel, TrainingExample,
+};
 
 use crate::backprop::{compute_gradients, cosine, mse_loss};
 use crate::encoder::Encoder;
 
 const DEFAULT_EMBED_TABLE_SIZE: usize = 8192;
+const OPEN_TO_GUARDED_ACTIVATIONS: u64 = 500;
+const GUARDED_TO_FROZEN_ACTIVATIONS: u64 = 2_000;
 
 /// Encoded input-target fact used by Stage 3 training.
 #[derive(Clone, Debug)]
@@ -14,7 +18,14 @@ pub struct EncodedFact {
     pub target: Vec<f32>,
 }
 
-/// Growth-aware result from a single Stage 7 learn call.
+/// Protection transitions from a Stage 8 promotion pass.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ProtectionReport {
+    pub neurons_promoted: u32,
+    pub neurons_frozen: u32,
+}
+
+/// Growth-aware result from a single learn call.
 #[derive(Clone, Debug)]
 pub struct LearnReport {
     pub loss_before: f32,
@@ -119,16 +130,51 @@ impl Trainer {
             loss_after = loss_for_fact(network, &fact)?;
         }
 
+        let protection_report = self.update_protection_levels(network);
+
         Ok(LearnReport {
             loss_before,
             loss_after,
             neurons_grown,
             layers_grown: 0,
-            neurons_promoted: 0,
-            neurons_frozen: network.frozen_neuron_count().min(u64::from(u32::MAX)) as u32,
+            neurons_promoted: protection_report.neurons_promoted,
+            neurons_frozen: protection_report.neurons_frozen,
             total_neurons: network.neuron_count(),
             update_applied,
         })
+    }
+
+    pub fn update_protection_levels(&self, network: &mut Network) -> ProtectionReport {
+        let mut report = ProtectionReport::default();
+
+        for layer in &mut network.layers {
+            for neuron in &mut layer.neurons {
+                neuron.importance_score = (neuron.activation_count as f32
+                    / GUARDED_TO_FROZEN_ACTIVATIONS as f32)
+                    .clamp(0.0, 1.0);
+
+                let before = neuron.protection_level;
+                if neuron.activation_count >= GUARDED_TO_FROZEN_ACTIVATIONS {
+                    if !matches!(before, ProtectionLevel::Frozen) {
+                        neuron.freeze_all();
+                    }
+                } else if neuron.activation_count >= OPEN_TO_GUARDED_ACTIVATIONS
+                    && matches!(before, ProtectionLevel::Open)
+                {
+                    neuron.guard_all();
+                }
+
+                let after = neuron.protection_level;
+                if after != before {
+                    report.neurons_promoted = report.neurons_promoted.saturating_add(1);
+                    if matches!(after, ProtectionLevel::Frozen) {
+                        report.neurons_frozen = report.neurons_frozen.saturating_add(1);
+                    }
+                }
+            }
+        }
+
+        report
     }
 
     pub fn learn_fact(&self, network: &mut Network, fact: &EncodedFact) -> Result<f32, ManasError> {
@@ -223,6 +269,7 @@ fn grow_for_fact(network: &mut Network, fact: &EncodedFact) -> Result<(), ManasE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manas_core::{GUARD_DELTA, ProtectionLevel};
 
     #[test]
     fn growth_trainer_learn_grows_empty_network() {
@@ -285,5 +332,120 @@ mod tests {
         assert_eq!(report.neurons_frozen, 0);
         assert_eq!(report.total_neurons, network.neuron_count());
         assert!(report.loss_before >= report.loss_after);
+    }
+
+    #[test]
+    fn protection_frozen_neuron_weight_never_changes() {
+        let mut network = Network::new(32, 64, 32);
+        network.layers[0].neurons[0].freeze_all();
+        let weights_before = network.layers[0].neurons[0].weights.clone();
+        let bias_before = network.layers[0].neurons[0].bias;
+        let mut trainer = Trainer::new(0.1);
+        trainer.growth_threshold = f32::MAX;
+
+        for index in 0..1000 {
+            trainer
+                .learn(
+                    &mut network,
+                    &format!("protection fact {index}"),
+                    &format!("protection value {index}"),
+                )
+                .unwrap();
+        }
+
+        assert_eq!(network.layers[0].neurons[0].weights, weights_before);
+        assert_eq!(network.layers[0].neurons[0].bias, bias_before);
+    }
+
+    #[test]
+    fn protection_guarded_neuron_updates_are_clamped() {
+        let mut network = Network::new(32, 64, 32);
+        network.layers[0].neurons[0].guard_all();
+        let weights_before = network.layers[0].neurons[0].weights.clone();
+        let bias_before = network.layers[0].neurons[0].bias;
+        let mut trainer = Trainer::new(1.0);
+        trainer.growth_threshold = f32::MAX;
+
+        for index in 0..100 {
+            trainer
+                .learn(
+                    &mut network,
+                    &format!("guard stress {index}"),
+                    &format!("guard target {index}"),
+                )
+                .unwrap();
+        }
+
+        for (before, after) in weights_before
+            .iter()
+            .zip(network.layers[0].neurons[0].weights.iter())
+        {
+            let delta = (after - before).abs();
+            assert!(delta <= GUARD_DELTA * 100.0 + 1.0e-5);
+        }
+        let bias_delta = (network.layers[0].neurons[0].bias - bias_before).abs();
+        assert!(bias_delta <= GUARD_DELTA * 100.0 + 1.0e-5);
+    }
+
+    #[test]
+    fn protection_open_neuron_updates_freely() {
+        let mut network = Network::new(32, 64, 32);
+        network.layers[0].neurons[0].protection_level = ProtectionLevel::Open;
+        let weights_before = network.layers[0].neurons[0].weights.clone();
+        let mut trainer = Trainer::new(0.1);
+        trainer.growth_threshold = f32::MAX;
+
+        for _ in 0..100 {
+            trainer.learn(&mut network, "hello", "world").unwrap();
+        }
+
+        let any_changed = weights_before
+            .iter()
+            .zip(network.layers[0].neurons[0].weights.iter())
+            .any(|(before, after)| (after - before).abs() > 1.0e-6);
+        assert!(any_changed);
+    }
+
+    #[test]
+    fn protection_promotion_happens_automatically() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        for _ in 0..3000 {
+            trainer.learn(&mut network, "cat", "animal").unwrap();
+            trainer.update_protection_levels(&mut network);
+        }
+
+        let promoted = network
+            .layers
+            .iter()
+            .flat_map(|layer| layer.neurons.iter())
+            .filter(|neuron| !matches!(neuron.protection_level, ProtectionLevel::Open))
+            .count();
+
+        assert!(promoted > 0);
+    }
+
+    #[test]
+    fn protection_learn_report_records_transitions() {
+        let mut network = Network::new(32, 64, 32);
+        network.layers[0].neurons[0].activation_count = OPEN_TO_GUARDED_ACTIVATIONS - 1;
+        network.layers[0].neurons[1].guard_all();
+        network.layers[0].neurons[1].activation_count = GUARDED_TO_FROZEN_ACTIVATIONS - 1;
+        let mut trainer = Trainer::new(0.01);
+        trainer.growth_threshold = f32::MAX;
+
+        let report = trainer.learn(&mut network, "rust", "language").unwrap();
+
+        assert!(report.neurons_promoted >= 2);
+        assert!(report.neurons_frozen >= 1);
+        assert_eq!(
+            network.layers[0].neurons[0].protection_level,
+            ProtectionLevel::Guarded
+        );
+        assert_eq!(
+            network.layers[0].neurons[1].protection_level,
+            ProtectionLevel::Frozen
+        );
     }
 }
