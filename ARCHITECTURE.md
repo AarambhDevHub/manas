@@ -736,6 +736,15 @@ impl Trainer {
     pub fn learn(&mut self, network: &mut Network, input: &str, target: &str)
         -> Result<LearnReport, ManasError> { ... }
 
+    // Teach one fact and preserve source metadata on the best matching neuron.
+    pub fn learn_with_source(
+        &mut self,
+        network: &mut Network,
+        input: &str,
+        target: &str,
+        source: Source,
+    ) -> Result<LearnReport, ManasError> { ... }
+
     // Ask the network a question. Returns best answer from weights.
     pub fn query(&mut self, network: &Network, question: &str)
         -> Result<QueryResult, ManasError> { ... }
@@ -745,7 +754,8 @@ impl Trainer {
 }
 
 pub struct LearnReport {
-    pub loss: f32,
+    pub loss_before: f32,
+    pub loss_after: f32,
     pub neurons_grown: u32,
     pub layers_grown: u32,
     pub neurons_promoted: u32,    // Open → Guarded or Guarded → Frozen
@@ -795,6 +805,7 @@ pub fn promote_if_needed(neuron: &mut Neuron, now: u64) {
 ### 10.4 `manas-ingest`
 
 Unified input pipeline. Converts anything into clean text chunks for learning.
+Stage 10 implements this with std-only parsing and deterministic folder order.
 
 **Dependencies:** `manas-core` (for `Source` type)
 
@@ -843,7 +854,8 @@ external CLI parsing can be added later if needed.
 #### Commands
 
 ```
-manas teach <INPUT>       Teach a raw text fact in Stage 9
+manas teach <text|file|folder> [--recursive]
+                          Teach raw text, a supported file, or a folder
 manas ask "<QUESTION>"    Ask a question — answered from neural weights
 manas inspect             Show brain state, neuron count, protection levels
 manas neurons             List all neurons with their importance scores
@@ -851,8 +863,7 @@ manas forget              Compress low-importance neurons to save space
 manas reset               Delete the brain and start fresh
 ```
 
-File and folder inputs for `teach` are Stage 10. `neurons` and `forget` are
-later milestones.
+`neurons` and `forget` are later milestones.
 
 #### `manas teach` Output Format
 
@@ -862,6 +873,7 @@ Teaching complete
 Input
   mode                  : text
   chunks processed      : 1
+  facts learned         : 1
 
 Network
   neurons grown         : 2

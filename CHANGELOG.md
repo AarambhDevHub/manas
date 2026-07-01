@@ -21,6 +21,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 7 — Growth system.
 - Stage 8 — Protection system hardened.
 - Stage 9 — `manas-cli` v1: teach and ask.
+- Stage 10 — File and folder ingestion.
 
 ### Added
 
@@ -52,10 +53,17 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added the first usable CLI loop with raw-text `teach`, neural-weight `ask`,
   `inspect`, `reset`, restart-safe vocab persistence in `brain.manas`, and
   CLI integration tests.
+- Added std-only `manas-ingest` support for raw text, files, and recursive
+  folders with deterministic normalization and chunking.
+- Added parsers for `.txt`, `.md`, `.rs`, `.toml`, `.json`, and `.csv`.
+- Added `Trainer::learn_with_source` and CLI file/folder teach routing so
+  `Source::LocalFile` metadata is preserved in learned neurons.
+- Added ingestion unit tests plus CLI integration tests for file source metadata
+  and recursive folder teaching.
 
 ### Next
 
-- Stage 10 — File and folder ingestion.
+- Stage 11 — Importance scoring and promotion.
 
 ---
 

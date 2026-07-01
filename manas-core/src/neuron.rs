@@ -31,6 +31,16 @@ pub enum Source {
     Unknown,
 }
 
+impl std::fmt::Display for Source {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Source::RawText => write!(formatter, "raw text"),
+            Source::LocalFile { path } => write!(formatter, "{path}"),
+            Source::Unknown => write!(formatter, "unknown"),
+        }
+    }
+}
+
 /// A single neural unit and its protection metadata.
 #[derive(Clone, Debug)]
 pub struct Neuron {
