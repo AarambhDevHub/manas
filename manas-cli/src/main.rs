@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use manas_core::Network;
+use manas_ingest::{IngestSource, ingest};
 use manas_learn::{AnswerSource, EncoderVocabEntry, LearnReport, Trainer};
 use manas_store::{BrainState, ManasBrain, VocabEntry};
 
@@ -44,16 +45,28 @@ where
 }
 
 fn teach(brain_path: &Path, args: &[String]) -> Result<(), String> {
-    let text = joined_text(args)?;
-    let (input, target) = extract_association(&text)?;
+    let request = teach_request(args)?;
+    let chunks = ingest(request.source).map_err(|error| error.to_string())?;
     let (mut network, mut trainer) = load_or_create_runtime(brain_path)?;
+    let mut summary = TeachSummary::new(request.mode, chunks.len());
 
-    let report = trainer
-        .learn(&mut network, &input, &target)
-        .map_err(|error| error.to_string())?;
+    for chunk in &chunks {
+        for unit in teachable_units(&chunk.text) {
+            let (input, target) = extract_association(&unit)?;
+            let report = trainer
+                .learn_with_source(&mut network, &input, &target, chunk.source.clone())
+                .map_err(|error| error.to_string())?;
+            summary.record(&input, &target, &report);
+        }
+    }
+
+    if summary.examples_learned == 0 {
+        return Err("input text is empty".to_string());
+    }
+
     save_runtime(brain_path, network, &trainer)?;
 
-    print_teach_report(&input, &target, &report);
+    print_teach_report(&summary);
     Ok(())
 }
 
@@ -168,28 +181,40 @@ fn save_runtime(brain_path: &Path, network: Network, trainer: &Trainer) -> Resul
         .map_err(|error| error.to_string())
 }
 
-fn print_teach_report(input: &str, target: &str, report: &LearnReport) {
+fn print_teach_report(summary: &TeachSummary) {
     println!("Teaching complete");
     println!();
     println!("Input");
-    println!("  mode                  : text");
-    println!("  chunks processed      : 1");
-    println!("  learned input         : {input}");
-    println!("  learned target        : {target}");
+    println!("  mode                  : {}", summary.mode.label());
+    println!("  chunks processed      : {}", summary.chunks_processed);
+    println!("  facts learned         : {}", summary.examples_learned);
+    if summary.examples_learned == 1 {
+        println!("  learned input         : {}", summary.last_input);
+        println!("  learned target        : {}", summary.last_target);
+    } else {
+        println!("  last learned input    : {}", summary.last_input);
+        println!("  last learned target   : {}", summary.last_target);
+    }
     println!();
     println!("Network");
-    println!("  neurons grown         : {}", report.neurons_grown);
-    println!("  layers grown          : {}", report.layers_grown);
-    println!("  neurons promoted      : {}", report.neurons_promoted);
-    println!("  neurons frozen        : {}", report.neurons_frozen);
-    println!("  total neurons         : {}", report.total_neurons);
+    println!("  neurons grown         : {}", summary.neurons_grown);
+    println!("  layers grown          : {}", summary.layers_grown);
+    println!("  neurons promoted      : {}", summary.neurons_promoted);
+    println!("  neurons frozen        : {}", summary.neurons_frozen);
+    println!("  total neurons         : {}", summary.total_neurons);
     println!();
     println!("Learning");
-    println!("  loss before           : {:.4}", report.loss_before);
-    println!("  loss after            : {:.4}", report.loss_after);
+    println!(
+        "  loss before           : {:.4}",
+        summary.first_loss_before.unwrap_or(0.0)
+    );
+    println!(
+        "  loss after            : {:.4}",
+        summary.last_loss_after.unwrap_or(0.0)
+    );
     println!(
         "  update applied        : {}",
-        if report.update_applied { "yes" } else { "no" }
+        if summary.update_applied { "yes" } else { "no" }
     );
 }
 
@@ -208,7 +233,7 @@ fn print_help() {
     println!("Manas");
     println!();
     println!("Usage:");
-    println!("  manas teach <text>");
+    println!("  manas teach <text|file|folder> [--recursive]");
     println!("  manas ask <question>");
     println!("  manas inspect");
     println!("  manas reset");
@@ -229,6 +254,176 @@ fn joined_text(args: &[String]) -> Result<String, String> {
     } else {
         Ok(trimmed.to_string())
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TeachMode {
+    Text,
+    File,
+    Folder,
+}
+
+impl TeachMode {
+    fn label(self) -> &'static str {
+        match self {
+            TeachMode::Text => "text",
+            TeachMode::File => "file",
+            TeachMode::Folder => "folder",
+        }
+    }
+}
+
+struct TeachRequest {
+    mode: TeachMode,
+    source: IngestSource,
+}
+
+struct TeachSummary {
+    mode: TeachMode,
+    chunks_processed: usize,
+    examples_learned: usize,
+    neurons_grown: u32,
+    layers_grown: u32,
+    neurons_promoted: u32,
+    neurons_frozen: u32,
+    total_neurons: u64,
+    first_loss_before: Option<f32>,
+    last_loss_after: Option<f32>,
+    update_applied: bool,
+    last_input: String,
+    last_target: String,
+}
+
+impl TeachSummary {
+    fn new(mode: TeachMode, chunks_processed: usize) -> Self {
+        Self {
+            mode,
+            chunks_processed,
+            examples_learned: 0,
+            neurons_grown: 0,
+            layers_grown: 0,
+            neurons_promoted: 0,
+            neurons_frozen: 0,
+            total_neurons: 0,
+            first_loss_before: None,
+            last_loss_after: None,
+            update_applied: false,
+            last_input: String::new(),
+            last_target: String::new(),
+        }
+    }
+
+    fn record(&mut self, input: &str, target: &str, report: &LearnReport) {
+        if self.first_loss_before.is_none() {
+            self.first_loss_before = Some(report.loss_before);
+        }
+
+        self.examples_learned += 1;
+        self.neurons_grown = self.neurons_grown.saturating_add(report.neurons_grown);
+        self.layers_grown = self.layers_grown.saturating_add(report.layers_grown);
+        self.neurons_promoted = self
+            .neurons_promoted
+            .saturating_add(report.neurons_promoted);
+        self.neurons_frozen = self.neurons_frozen.saturating_add(report.neurons_frozen);
+        self.total_neurons = report.total_neurons;
+        self.last_loss_after = Some(report.loss_after);
+        self.update_applied |= report.update_applied;
+        self.last_input = input.to_string();
+        self.last_target = target.to_string();
+    }
+}
+
+fn teach_request(args: &[String]) -> Result<TeachRequest, String> {
+    let mut recursive = false;
+    let mut values = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "--recursive" => recursive = true,
+            option if option.starts_with("--") => {
+                return Err(format!("unknown teach option '{option}'"));
+            }
+            value => values.push(value.to_string()),
+        }
+    }
+
+    if values.is_empty() {
+        return Err("input text is empty".to_string());
+    }
+
+    if values.len() == 1 {
+        let path = PathBuf::from(&values[0]);
+        if path.exists() {
+            if path.is_file() {
+                return Ok(TeachRequest {
+                    mode: TeachMode::File,
+                    source: IngestSource::File(path),
+                });
+            }
+            if path.is_dir() {
+                return Ok(TeachRequest {
+                    mode: TeachMode::Folder,
+                    source: IngestSource::Folder(path),
+                });
+            }
+            return Err(format!(
+                "input path is not a file or folder: {}",
+                path.display()
+            ));
+        }
+
+        if looks_like_path(&values[0]) {
+            return Err(format!("input path not found: {}", path.display()));
+        }
+    }
+
+    if recursive {
+        return Err("--recursive can only be used with folder input".to_string());
+    }
+
+    Ok(TeachRequest {
+        mode: TeachMode::Text,
+        source: IngestSource::RawText(values.join(" ")),
+    })
+}
+
+fn looks_like_path(value: &str) -> bool {
+    let has_whitespace = value.chars().any(char::is_whitespace);
+    value.contains('/')
+        || value.contains('\\')
+        || (!has_whitespace && Path::new(value).extension().is_some())
+        || value == "."
+        || value == ".."
+}
+
+fn teachable_units(text: &str) -> Vec<String> {
+    let mut units = Vec::new();
+    let mut current = String::new();
+
+    for ch in text.chars() {
+        current.push(ch);
+        if matches!(ch, '.' | '!' | '?' | '\n') {
+            push_teachable_unit(&mut units, &mut current);
+        }
+    }
+    push_teachable_unit(&mut units, &mut current);
+
+    if units.is_empty() {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            units.push(trimmed.to_string());
+        }
+    }
+
+    units
+}
+
+fn push_teachable_unit(units: &mut Vec<String>, current: &mut String) {
+    let unit = current.trim();
+    if !unit.is_empty() {
+        units.push(unit.to_string());
+    }
+    current.clear();
 }
 
 fn extract_association(text: &str) -> Result<(String, String), String> {

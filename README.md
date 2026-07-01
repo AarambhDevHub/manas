@@ -127,8 +127,9 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 7 | Growth system | Complete |
 | Stage 8 | Protection system hardened | Complete |
 | Stage 9 | `manas teach` and `manas ask` | Complete |
-| Stage 10 | File and folder ingestion | Next |
-| Stage 11+ | Importance, freshness, benchmarks, layer growth | Planned |
+| Stage 10 | File and folder ingestion | Complete |
+| Stage 11 | Importance scoring and promotion | Next |
+| Stage 12+ | Freshness, benchmarks, layer growth | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -145,6 +146,9 @@ hardens protection so frozen neurons cannot change, guarded neurons are clamped,
 protection survives save/load, and frequently updated neurons promote
 automatically during learning. Stage 9 connects the CLI to learning, querying,
 inspection, reset, and restart-safe `.manas` persistence for raw text facts.
+Stage 10 completes local ingestion so `manas teach` accepts raw text, a supported
+file, or a folder of supported files while preserving local file source metadata
+inside the learned neurons.
 
 Run the proof:
 
@@ -204,6 +208,12 @@ Run the CLI proof:
 ```bash
 cargo test -p manas-cli
 cargo test -p manas-learn query
+```
+
+Run the ingestion proof:
+
+```bash
+cargo test -p manas-ingest
 ```
 
 See [ROADMAP.md](./ROADMAP.md) for the full plan with tests.

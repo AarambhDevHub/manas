@@ -1,5 +1,6 @@
 use manas_core::{
-    GROWTH_THRESHOLD, MAX_UPDATE_ATTEMPTS, ManasError, Network, ProtectionLevel, TrainingExample,
+    GROWTH_THRESHOLD, MAX_UPDATE_ATTEMPTS, ManasError, Network, ProtectionLevel, Source,
+    TrainingExample,
 };
 
 use crate::backprop::{compute_gradients, cosine, mse_loss};
@@ -106,6 +107,16 @@ impl Trainer {
         input: &str,
         target: &str,
     ) -> Result<LearnReport, ManasError> {
+        self.learn_with_source(network, input, target, Source::RawText)
+    }
+
+    pub fn learn_with_source(
+        &mut self,
+        network: &mut Network,
+        input: &str,
+        target: &str,
+        source: Source,
+    ) -> Result<LearnReport, ManasError> {
         let fact = self.encode_fact(input, target);
         let loss_before = loss_for_fact(network, &fact)?;
         let mut loss_after = loss_before;
@@ -145,6 +156,7 @@ impl Trainer {
         }
 
         let protection_report = self.update_protection_levels(network);
+        assign_source_to_best_hidden(network, &fact.input, source);
 
         Ok(LearnReport {
             loss_before,
@@ -303,6 +315,26 @@ fn grow_for_fact(network: &mut Network, fact: &EncodedFact) -> Result<(), ManasE
         }],
         &[],
     )
+}
+
+fn assign_source_to_best_hidden(network: &mut Network, input: &[f32], source: Source) {
+    let Some((index, _)) = network.layers.first().and_then(|layer| {
+        layer
+            .neurons
+            .iter()
+            .enumerate()
+            .filter(|(_, neuron)| !matches!(neuron.protection_level, ProtectionLevel::Frozen))
+            .map(|(index, neuron)| (index, neuron.activate(input).abs()))
+            .max_by(|left, right| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }) else {
+        return;
+    };
+
+    network.layers[0].neurons[index].source = source;
 }
 
 #[cfg(test)]
@@ -521,5 +553,25 @@ mod tests {
 
         assert_eq!(result.answered_from, AnswerSource::NotEnough);
         assert_eq!(result.confidence, 0.0);
+    }
+
+    #[test]
+    fn learn_with_source_preserves_local_file_metadata() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+        let source = Source::LocalFile {
+            path: "notes/facts.txt".to_string(),
+        };
+
+        trainer
+            .learn_with_source(&mut network, "cat", "small animal with fur", source.clone())
+            .unwrap();
+
+        assert!(
+            network.layers[0]
+                .neurons
+                .iter()
+                .any(|neuron| neuron.source == source)
+        );
     }
 }

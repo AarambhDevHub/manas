@@ -78,8 +78,8 @@ from Stage 2 onward.**
 | Stage 7 | Growth system | Complete |
 | Stage 8 | Protection system hardened | Complete |
 | Stage 9 | `manas-cli` v1 — teach and ask | Complete |
-| Stage 10 | File and folder ingestion | Next |
-| Stage 11 | Importance scoring and promotion | Planned |
+| Stage 10 | File and folder ingestion | Complete |
+| Stage 11 | Importance scoring and promotion | Next |
 | Stage 12 | Freshness system | Planned |
 | Stage 13 | The real demo | Planned |
 | Stage 14 | Inspect, neurons, and debug commands | Planned |
@@ -1443,11 +1443,26 @@ fn markdown_strips_syntax() {
 
 ### Done When
 
-- [ ] All format parsers work and are tested
-- [ ] Folder walking is recursive and respects supported extensions
-- [ ] Source metadata (`Source::LocalFile`) is preserved per chunk
-- [ ] Anti-forgetting test still passes after real file ingestion
-- [ ] `cargo test -p manas-ingest` passes clean
+- [x] All format parsers work and are tested
+- [x] Folder walking is recursive and respects supported extensions
+- [x] Source metadata (`Source::LocalFile`) is preserved per chunk
+- [x] Anti-forgetting test still passes after real file ingestion
+- [x] `cargo test -p manas-ingest` passes clean
+
+Completion note:
+- Replaced the placeholder `manas-ingest` crate with std-only ingestion for raw
+  text, files, and folders
+- Added deterministic parsing for `.txt`, `.md`, `.rs`, `.toml`, `.json`, and
+  `.csv`, plus normalization and bounded chunking
+- Added recursive sorted folder walking that skips unsupported files in folders
+  and returns explicit errors for unsupported file inputs
+- Added `Trainer::learn_with_source` and CLI file/folder teach routing so local
+  file source metadata is preserved in neurons
+- Added ingestion unit tests and CLI integration tests for file source metadata
+  and recursive folder teaching
+- Current proof results: `cargo test -p manas-ingest`, `cargo test -p manas-cli`,
+  `cargo test -p manas-store`, and `cargo test -p manas-learn anti_forgetting`
+  pass
 
 ---
 

@@ -3,6 +3,9 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use manas_core::Source;
+use manas_store::ManasBrain;
+
 #[test]
 fn cli_teach_ask_inspect_and_reset_work_across_processes() {
     let dir = temp_dir("teach-ask");
@@ -41,6 +44,80 @@ fn cli_teach_ask_inspect_and_reset_work_across_processes() {
     let reset = run(&dir, &["reset"]);
     assert_success(&reset);
     assert!(!dir.join("brain.manas").exists());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_teach_file_preserves_source_and_answers() {
+    let dir = temp_dir("teach-file");
+    let notes = dir.join("notes.txt");
+    fs::write(
+        &notes,
+        "A cat is a small domesticated animal with fur and whiskers.",
+    )
+    .unwrap();
+    let notes_arg = notes.to_string_lossy().into_owned();
+
+    let teach = run(&dir, &["teach", &notes_arg]);
+    assert_success(&teach);
+    let teach_stdout = stdout(&teach);
+    assert!(teach_stdout.contains("Teaching complete"));
+    assert!(teach_stdout.contains("mode                  : file"));
+
+    let state = ManasBrain::new(dir.join("brain.manas"))
+        .load_state()
+        .unwrap();
+    let has_file_source = state
+        .network
+        .layers
+        .first()
+        .map(|layer| {
+            layer.neurons.iter().any(|neuron| {
+                matches!(&neuron.source, Source::LocalFile { path } if path.contains("notes.txt"))
+            })
+        })
+        .unwrap_or(false);
+    assert!(has_file_source, "expected notes.txt source metadata");
+
+    let ask = run(&dir, &["ask", "What is a cat?"]);
+    assert_success(&ask);
+    let ask_stdout = stdout(&ask);
+    assert!(ask_stdout.contains("neural weights"), "{ask_stdout}");
+    assert!(
+        ask_stdout.contains("animal") || ask_stdout.contains("fur"),
+        "{ask_stdout}"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_teach_folder_walks_supported_files_recursively() {
+    let dir = temp_dir("teach-folder");
+    let docs = dir.join("docs");
+    let nested = docs.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(docs.join("cat.txt"), "A cat is a small animal with fur.").unwrap();
+    fs::write(
+        nested.join("paris.md"),
+        "# Paris\n\nParis is a city in France.",
+    )
+    .unwrap();
+    fs::write(docs.join("skip.exe"), "ignored").unwrap();
+
+    let teach = run(&dir, &["teach", "docs", "--recursive"]);
+    assert_success(&teach);
+    let teach_stdout = stdout(&teach);
+    assert!(teach_stdout.contains("Teaching complete"));
+    assert!(teach_stdout.contains("mode                  : folder"));
+    assert!(teach_stdout.contains("chunks processed"));
+    assert!(teach_stdout.contains("facts learned"));
+
+    let ask = run(&dir, &["ask", "Where is Paris?"]);
+    assert_success(&ask);
+    let ask_stdout = stdout(&ask);
+    assert!(ask_stdout.contains("neural weights"), "{ask_stdout}");
 
     fs::remove_dir_all(dir).unwrap();
 }
