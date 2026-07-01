@@ -17,6 +17,9 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 3 — Crate structure.
 - Stage 4 — Persistence: the `.manas` binary format.
 - Stage 5 — Character n-gram tokenizer.
+- Stage 6 — Positional embeddings.
+- Stage 7 — Growth system.
+- Stage 8 — Protection system hardened.
 
 ### Added
 
@@ -39,10 +42,16 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deterministic query encoding and tokenizer tests.
 - Replaced the Stage 3 word-hash encoder path with tokenizer-backed token ID
   embeddings while keeping the anti-forgetting proof passing.
+- Added positional embeddings so token order affects fixed-width encodings.
+- Added bounded hidden-neuron growth, empty-network startup, growth-aware
+  `Trainer::learn`, and growth reporting.
+- Hardened protection enforcement with monotonic protection strengthening,
+  trainer-level promotion, transition reporting, and stress tests for frozen,
+  guarded, open, promoted, and persisted protection states.
 
 ### Next
 
-- Stage 6 — Positional embeddings.
+- Stage 9 — `manas-cli` v1: teach and ask.
 
 ---
 

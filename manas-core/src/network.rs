@@ -779,14 +779,14 @@ fn apply_weight_updates(
         .zip(neuron.weight_protection.iter())
         .zip(gradients.iter())
     {
-        let protection = strongest_protection(neuron.protection_level, *weight_protection);
+        let protection = neuron.protection_level.strongest(*weight_protection);
         apply_protected_update(weight, -lr * gradient, protection);
     }
 
     apply_protected_update(
         &mut neuron.bias,
         -lr * gradient.bias_gradient.clamp(-GRAD_CLIP, GRAD_CLIP),
-        strongest_protection(neuron.protection_level, neuron.bias_protection),
+        neuron.protection_level.strongest(neuron.bias_protection),
     );
     neuron.activation_count += 1;
 }
@@ -796,14 +796,6 @@ fn apply_protected_update(value: &mut f32, raw_update: f32, protection: Protecti
         ProtectionLevel::Open => *value += raw_update,
         ProtectionLevel::Guarded => *value += raw_update.clamp(-GUARD_DELTA, GUARD_DELTA),
         ProtectionLevel::Frozen => {}
-    }
-}
-
-fn strongest_protection(left: ProtectionLevel, right: ProtectionLevel) -> ProtectionLevel {
-    match (left, right) {
-        (ProtectionLevel::Frozen, _) | (_, ProtectionLevel::Frozen) => ProtectionLevel::Frozen,
-        (ProtectionLevel::Guarded, _) | (_, ProtectionLevel::Guarded) => ProtectionLevel::Guarded,
-        (ProtectionLevel::Open, ProtectionLevel::Open) => ProtectionLevel::Open,
     }
 }
 
@@ -988,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_neuron_weights_never_change() {
+    fn protection_frozen_neuron_weights_and_bias_never_change() {
         let mut network = Network::new(32, 64, 32);
         network.layers[0].neurons[0].freeze_all();
         let weights_before = network.layers[0].neurons[0].weights.clone();
@@ -1008,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_output_edge_never_changes() {
+    fn protection_frozen_output_edge_never_changes() {
         let mut network = Network::new(32, 64, 32);
         network.layers[1].neurons[0].weight_protection[0] = ProtectionLevel::Frozen;
         let edge_before = network.layers[1].neurons[0].weights[0];
@@ -1026,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn guarded_updates_are_clamped() {
+    fn protection_guarded_updates_are_clamped() {
         let mut network = Network::new(32, 64, 32);
         network.layers[0].neurons[0].guard_all();
         let weights_before = network.layers[0].neurons[0].weights.clone();
@@ -1048,5 +1040,62 @@ mod tests {
             assert!((after - before).abs() <= GUARD_DELTA + 1.0e-6);
         }
         assert!((network.layers[0].neurons[0].bias - bias_before).abs() <= GUARD_DELTA + 1.0e-6);
+    }
+
+    #[test]
+    fn protection_open_neuron_updates_freely() {
+        let mut network = Network::new(32, 64, 32);
+        let weights_before = network.layers[0].neurons[0].weights.clone();
+        let bias_before = network.layers[0].neurons[0].bias;
+        let gradients = vec![(
+            network.layers[0].neurons[0].id,
+            NeuronGradients {
+                weight_gradients: vec![0.5; 32],
+                bias_gradient: 0.5,
+            },
+        )];
+
+        network.apply_gradients(&gradients, 0.1).unwrap();
+
+        let any_weight_changed = weights_before
+            .iter()
+            .zip(network.layers[0].neurons[0].weights.iter())
+            .any(|(before, after)| (after - before).abs() > 1.0e-6);
+        assert!(any_weight_changed);
+        assert!((network.layers[0].neurons[0].bias - bias_before).abs() > 1.0e-6);
+    }
+
+    #[test]
+    fn protection_guard_all_never_weakens_frozen_components() {
+        let mut network = Network::new(32, 64, 32);
+        network.layers[0].neurons[0].weight_protection[0] = ProtectionLevel::Frozen;
+        network.layers[0].neurons[0].bias_protection = ProtectionLevel::Frozen;
+
+        network.layers[0].neurons[0].guard_all();
+
+        assert_eq!(
+            network.layers[0].neurons[0].protection_level,
+            ProtectionLevel::Guarded
+        );
+        assert_eq!(
+            network.layers[0].neurons[0].weight_protection[0],
+            ProtectionLevel::Frozen
+        );
+        assert_eq!(
+            network.layers[0].neurons[0].weight_protection[1],
+            ProtectionLevel::Guarded
+        );
+        assert_eq!(
+            network.layers[0].neurons[0].bias_protection,
+            ProtectionLevel::Frozen
+        );
+
+        network.layers[0].neurons[1].freeze_all();
+        network.layers[0].neurons[1].guard_all();
+
+        assert_eq!(
+            network.layers[0].neurons[1].protection_level,
+            ProtectionLevel::Frozen
+        );
     }
 }

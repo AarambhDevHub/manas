@@ -76,8 +76,8 @@ from Stage 2 onward.**
 | Stage 5 | Character n-gram tokenizer | Complete |
 | Stage 6 | Positional embeddings | Complete |
 | Stage 7 | Growth system | Complete |
-| Stage 8 | Protection system hardened | Next |
-| Stage 9 | `manas-cli` v1 — teach and ask | Planned |
+| Stage 8 | Protection system hardened | Complete |
+| Stage 9 | `manas-cli` v1 — teach and ask | Next |
 | Stage 10 | File and folder ingestion | Planned |
 | Stage 11 | Importance scoring and promotion | Planned |
 | Stage 12 | Freshness system | Planned |
@@ -1250,13 +1250,26 @@ fn promotion_happens_automatically() {
 
 ### Done When
 
-- [ ] All 5 protection tests pass
-- [ ] `frozen_neuron_weight_never_changes` passes under extreme LR
-- [ ] `guarded_neuron_updates_are_clamped` confirms delta bounds
-- [ ] `protection_survives_save_and_load` confirms persistence
-- [ ] `promotion_happens_automatically` confirms auto-promotion
-- [ ] Full anti-forgetting test still passes
-- [ ] `cargo test -p manas-core protection` passes clean
+- [x] All 5 protection tests pass
+- [x] `frozen_neuron_weight_never_changes` passes under extreme LR
+- [x] `guarded_neuron_updates_are_clamped` confirms delta bounds
+- [x] `protection_survives_save_and_load` confirms persistence
+- [x] `promotion_happens_automatically` confirms auto-promotion
+- [x] Full anti-forgetting test still passes
+- [x] `cargo test -p manas-core protection` passes clean
+
+Completion note:
+- Added monotonic protection strengthening so `guard_all()` cannot weaken frozen
+  neuron, weight, or bias protection
+- Added Stage 8 activation-count promotion in `Trainer::learn` and
+  `Trainer::update_protection_levels`
+- Added `ProtectionReport` and filled `LearnReport.neurons_promoted` /
+  `LearnReport.neurons_frozen` with actual transition counts
+- Added focused protection tests across `manas-core`, `manas-learn`, and
+  `manas-store`
+- Current proof results: `cargo test -p manas-core protection`,
+  `cargo test -p manas-learn protection`, `cargo test -p manas-store protection`,
+  and `cargo test -p manas-learn anti_forgetting` pass
 
 ---
 

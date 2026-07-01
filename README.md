@@ -125,8 +125,8 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 5 | Character n-gram tokenizer | Complete |
 | Stage 6 | Positional embeddings | Complete |
 | Stage 7 | Growth system | Complete |
-| Stage 8 | Protection system hardened | Next |
-| Stage 9 | `manas teach` and `manas ask` | Planned |
+| Stage 8 | Protection system hardened | Complete |
+| Stage 9 | `manas teach` and `manas ask` | Next |
 | Stage 10+ | File ingestion, inspect, benchmarks, layer growth | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
@@ -139,7 +139,10 @@ stages add real vocab persistence. Stage 5 replaces the word-hash encoder path
 with a character prefix n-gram tokenizer. Stage 6 adds positional embeddings so
 the encoder preserves token order while keeping the same fixed-width vector
 interface and anti-forgetting proof. Stage 7 adds bounded hidden-neuron growth
-so a brain can start empty and gain capacity only when learning needs it.
+so a brain can start empty and gain capacity only when learning needs it. Stage 8
+hardens protection so frozen neurons cannot change, guarded neurons are clamped,
+protection survives save/load, and frequently updated neurons promote
+automatically during learning.
 
 Run the proof:
 
@@ -184,6 +187,14 @@ Run the growth proof:
 ```bash
 cargo test -p manas-core growth
 cargo test -p manas-learn growth
+```
+
+Run the protection proof:
+
+```bash
+cargo test -p manas-core protection
+cargo test -p manas-learn protection
+cargo test -p manas-store protection
 ```
 
 See [ROADMAP.md](./ROADMAP.md) for the full plan with tests.

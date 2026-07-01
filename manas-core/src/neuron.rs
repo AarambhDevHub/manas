@@ -11,6 +11,18 @@ pub enum ProtectionLevel {
     Frozen,
 }
 
+impl ProtectionLevel {
+    pub fn strongest(self, other: Self) -> Self {
+        match (self, other) {
+            (ProtectionLevel::Frozen, _) | (_, ProtectionLevel::Frozen) => ProtectionLevel::Frozen,
+            (ProtectionLevel::Guarded, _) | (_, ProtectionLevel::Guarded) => {
+                ProtectionLevel::Guarded
+            }
+            (ProtectionLevel::Open, ProtectionLevel::Open) => ProtectionLevel::Open,
+        }
+    }
+}
+
 /// Metadata about where a neuron came from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Source {
@@ -87,10 +99,10 @@ impl Neuron {
     }
 
     pub fn guard_all(&mut self) {
-        self.protection_level = ProtectionLevel::Guarded;
-        self.bias_protection = ProtectionLevel::Guarded;
+        self.protection_level = self.protection_level.strongest(ProtectionLevel::Guarded);
+        self.bias_protection = self.bias_protection.strongest(ProtectionLevel::Guarded);
         for protection in &mut self.weight_protection {
-            *protection = ProtectionLevel::Guarded;
+            *protection = protection.strongest(ProtectionLevel::Guarded);
         }
     }
 }

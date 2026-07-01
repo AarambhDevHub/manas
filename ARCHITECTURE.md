@@ -286,10 +286,11 @@ pub enum ProtectionLevel {
 
 Rules:
 - A neuron starts as `Open` when created
-- After being used in N successful forward passes: promoted to `Guarded`
-- After importance score exceeds threshold: promoted to `Frozen`
+- Stage 8 promotion uses activation counts: `Open → Guarded` at 500 updates,
+  then `Guarded → Frozen` at 2,000 updates
 - `Frozen` neurons are **never** updated by backprop — zero gradient applied
 - `Guarded` neurons receive updates clamped to `[-GUARD_DELTA, +GUARD_DELTA]`
+- Promotion is monotonic: protection can be strengthened but never weakened
 
 This is enforced inside `apply_gradients()` in `manas-core` — not in the
 trainer, not in the CLI. The protection is structural, not optional.
@@ -308,6 +309,9 @@ importance = 0.40 × activation_frequency
 Neurons with high importance are promoted to `Guarded` or `Frozen` automatically
 after each learning step. Low-importance neurons stay `Open` and are candidates
 for reuse or compression.
+
+Stage 8 uses a simple activation-count score for promotion. The full weighted
+importance formula above is formalized later in Stage 11.
 
 ### Layer 3 — Growth Instead of Overwrite
 
