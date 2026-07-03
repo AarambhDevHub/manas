@@ -20,6 +20,18 @@ pub struct ManasBrain {
 pub struct BrainState {
     pub network: Network,
     pub vocab_entries: Vec<VocabEntry>,
+    pub metadata: BrainMetadata,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrainMetadata {
+    pub format_version: u8,
+    pub created_at: u64,
+    pub modified_at: u64,
+    pub total_neurons: u64,
+    pub layer_count: u32,
+    pub input_dim: u32,
+    pub vocab_size: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +39,31 @@ pub struct VocabEntry {
     pub token: String,
     pub id: u32,
     pub embedding: Vec<f32>,
+}
+
+impl BrainState {
+    pub fn new(network: Network, vocab_entries: Vec<VocabEntry>) -> Self {
+        let metadata = BrainMetadata::from_network(&network, vocab_entries.len());
+        Self {
+            network,
+            vocab_entries,
+            metadata,
+        }
+    }
+}
+
+impl BrainMetadata {
+    fn from_network(network: &Network, vocab_entry_count: usize) -> Self {
+        Self {
+            format_version: FORMAT_VERSION,
+            created_at: network.created_at,
+            modified_at: 0,
+            total_neurons: network.total_neurons,
+            layer_count: network.layers.len() as u32,
+            input_dim: network.input_dim as u32,
+            vocab_size: vocab_entry_count as u32,
+        }
+    }
 }
 
 impl ManasBrain {
@@ -63,6 +100,10 @@ impl ManasBrain {
         decode_state(&bytes)
     }
 
+    pub fn metadata(&self) -> Result<BrainMetadata, ManasError> {
+        Ok(self.load_state()?.metadata)
+    }
+
     pub fn exists(&self) -> bool {
         self.path.exists()
     }
@@ -77,12 +118,18 @@ impl ManasBrain {
 fn encode_state(network: &Network, vocab_entries: &[VocabEntry]) -> Result<Vec<u8>, ManasError> {
     validate_network_for_save(network)?;
     let vocab_size = validate_vocab_entries(vocab_entries, network.input_dim)?;
+    let modified_at = unix_now();
+    let created_at = if network.created_at == 0 {
+        modified_at
+    } else {
+        network.created_at
+    };
 
     let mut bytes = Vec::new();
     bytes.extend_from_slice(MAGIC);
     write_u8(&mut bytes, FORMAT_VERSION);
-    write_u64(&mut bytes, network.created_at);
-    write_u64(&mut bytes, unix_now());
+    write_u64(&mut bytes, created_at);
+    write_u64(&mut bytes, modified_at);
     write_u64(&mut bytes, network.total_neurons);
     write_u32(
         &mut bytes,
@@ -127,10 +174,11 @@ fn decode_state(bytes: &[u8]) -> Result<BrainState, ManasError> {
     }
 
     let created_at = reader.read_u64()?;
-    let _modified_at = reader.read_u64()?;
+    let modified_at = reader.read_u64()?;
     let expected_total_neurons = reader.read_u64()?;
     let expected_layer_count = reader.read_u32()?;
-    let input_dim = u32_to_usize(reader.read_u32()?, "input dimension")?;
+    let input_dim_raw = reader.read_u32()?;
+    let input_dim = u32_to_usize(input_dim_raw, "input dimension")?;
     let vocab_size = reader.read_u32()?;
     let vocab_entries = read_vocab(&mut reader, vocab_size, input_dim)?;
 
@@ -146,9 +194,20 @@ fn decode_state(bytes: &[u8]) -> Result<BrainState, ManasError> {
         ));
     }
 
+    let metadata = BrainMetadata {
+        format_version: version,
+        created_at,
+        modified_at,
+        total_neurons: expected_total_neurons,
+        layer_count: expected_layer_count,
+        input_dim: input_dim_raw,
+        vocab_size,
+    };
+
     Ok(BrainState {
         network,
         vocab_entries,
+        metadata,
     })
 }
 

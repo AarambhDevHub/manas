@@ -429,7 +429,8 @@ manas/
 │       ├── decoder.rs      ← output vector → human-readable text
 │       ├── backprop.rs     ← MSE loss, gradient computation
 │       ├── trainer.rs      ← learn(), query(), grow decision logic
-│       └── importance.rs   ← importance scoring, promotion logic
+│       ├── importance.rs   ← importance scoring, promotion logic
+│       └── diagnostics.rs  ← inspect, neuron list, trace data models
 │
 ├── manas-ingest/           ← INPUT PIPELINE
 │   ├── Cargo.toml          ← deps: manas-core
@@ -451,13 +452,7 @@ manas/
 └── manas-cli/              ← USER INTERFACE
     ├── Cargo.toml          ← deps: all crates above
     └── src/
-        ├── main.rs         ← arg parsing, command routing
-        └── commands/
-            ├── teach.rs    ← manas teach <text|file|folder>
-            ├── ask.rs      ← manas ask "question"
-            ├── inspect.rs  ← manas inspect
-            ├── neurons.rs  ← manas neurons
-            └── forget.rs   ← manas forget (compress low-importance)
+        └── main.rs         ← std-only arg parsing, command routing, formatting
 ```
 
 **Total crates: 5** (v1 had 9 — simpler is better)
@@ -618,19 +613,25 @@ pub struct ManasBrain {
 impl ManasBrain {
     pub fn new(path: impl Into<PathBuf>) -> Self { ... }
     pub fn save(&self, network: &Network) -> Result<(), ManasError> { ... }
+    pub fn save_state(&self, state: &BrainState) -> Result<(), ManasError> { ... }
     pub fn load(&self) -> Result<Network, ManasError> { ... }
-    pub fn append_neuron(&self, layer_id: u32, neuron: &Neuron) -> Result<(), ManasError> { ... }
-    pub fn update_neuron(&self, neuron_id: u64, neuron: &Neuron) -> Result<(), ManasError> { ... }
+    pub fn load_state(&self) -> Result<BrainState, ManasError> { ... }
+    pub fn metadata(&self) -> Result<BrainMetadata, ManasError> { ... }
     pub fn exists(&self) -> bool { ... }
     pub fn size_bytes(&self) -> u64 { ... }
 }
 ```
 
+Stage 14 exposes `BrainMetadata` from the existing header fields:
+format version, created time, modified time, total neurons, layer count,
+input dimension, and vocab size. This does not change the version 2 binary
+format.
+
 #### Why Append-Only Growth Matters
 
-When a new neuron grows, `append_neuron()` adds it to the end of the file without
-rewriting the whole brain. For a large brain with 10,000 neurons, this means
-adding a new neuron takes microseconds instead of seconds.
+Future storage patching can append newly grown neurons without rewriting the
+whole brain. The current implementation saves validated full `BrainState`
+snapshots with CRC32 integrity.
 
 ---
 
@@ -881,13 +882,13 @@ external CLI parsing can be added later if needed.
 manas teach <text|file|folder> [--recursive]
                           Teach raw text, a supported file, or a folder
 manas ask "<QUESTION>"    Ask a question — answered from neural weights
-manas inspect             Show brain state, neuron count, protection levels
-manas neurons             List all neurons with their importance scores
-manas forget              Compress low-importance neurons to save space
+manas inspect             Show brain, network, learning, freshness, source, layer stats
+manas neurons             List/filter neurons with importance, protection, source
+manas trace "<QUESTION>"  Trace query variants, activations, and output values
 manas reset               Delete the brain and start fresh
 ```
 
-`neurons` and `forget` are later milestones.
+`forget` is a later milestone.
 
 #### `manas teach` Output Format
 

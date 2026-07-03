@@ -2,6 +2,7 @@
 
 pub mod backprop;
 pub mod decoder;
+pub mod diagnostics;
 pub mod embedder;
 pub mod encoder;
 pub mod fixtures;
@@ -10,6 +11,12 @@ pub mod importance;
 pub mod tokenizer;
 pub mod trainer;
 
+pub use diagnostics::{
+    BrainDiagnostics, FreshnessDiagnostics, LayerDiagnostics, LearningDiagnostics,
+    NetworkDiagnostics, NeuronActivationDiagnostic, NeuronDiagnostics, NeuronFilter,
+    OutputValueDiagnostic, QueryTrace, SourceDiagnostics, TraceVariant,
+    filtered_neuron_diagnostics, neuron_diagnostics, trace_query,
+};
 pub use embedder::Embedder;
 pub use encoder::{Encoder, EncoderVocabEntry};
 pub use freshness::{

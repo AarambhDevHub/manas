@@ -491,7 +491,7 @@ fn detected_freshness(input: &str, target: &str) -> FreshnessCategory {
     detect_freshness(&text)
 }
 
-fn query_variants(question: &str) -> Vec<String> {
+pub(crate) fn query_variants(question: &str) -> Vec<String> {
     let words = normalized_query_words(question);
     if words.is_empty() {
         return vec![question.trim().to_string()];

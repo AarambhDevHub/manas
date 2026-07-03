@@ -25,6 +25,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 11 — Importance scoring and promotion.
 - Stage 12 — Freshness system.
 - Stage 13 — The real demo.
+- Stage 14 — Inspect, neurons, and debug commands.
 
 ### Added
 
@@ -83,10 +84,20 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added `demo.sh` plus the Stage 13 CLI integration test that teaches 22 facts,
   deletes all historical sidecars, verifies five neural-weight answers, and
   enforces the sub-500KB brain size gate.
+- Added `manas-learn::diagnostics` with brain summaries, neuron rows, filters,
+  and query traces for Stage 14 visibility.
+- Added `.manas` header metadata exposure for format version, created time,
+  modified time, dimensions, vocab size, and neuron count without changing the
+  binary format.
+- Expanded `manas inspect` with Brain, Network, Learning, Freshness, Sources,
+  and Layers sections.
+- Added `manas neurons` with protection and source filters, plus `manas trace`
+  with query variants, selected neuron, top hidden activations, and top output
+  values.
 
 ### Next
 
-- Stage 14 — Inspect, neurons, and debug commands.
+- Stage 15 — Compression and forget command.
 
 ---
 
