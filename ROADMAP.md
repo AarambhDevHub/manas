@@ -80,8 +80,8 @@ from Stage 2 onward.**
 | Stage 9 | `manas-cli` v1 — teach and ask | Complete |
 | Stage 10 | File and folder ingestion | Complete |
 | Stage 11 | Importance scoring and promotion | Complete |
-| Stage 12 | Freshness system | Next |
-| Stage 13 | The real demo | Planned |
+| Stage 12 | Freshness system | Complete |
+| Stage 13 | The real demo | Next |
 | Stage 14 | Inspect, neurons, and debug commands | Planned |
 | Stage 15 | Compression and forget command | Planned |
 | Stage 16 | Benchmarks and test suite | Planned |
@@ -1569,6 +1569,10 @@ Completion note:
 
 **Goal:** Every fact knows how time-sensitive it is. Stale facts are flagged.
 
+**Status:** Complete. Freshness is detected during `teach`, stored on learned
+neurons, persisted in `.manas`, and surfaced by `manas ask` when an answer comes
+from stale neuron metadata.
+
 ### What to Build
 
 ```rust
@@ -1638,10 +1642,19 @@ fn fast_fact_stale_after_30_days() {
 
 ### Done When
 
-- [ ] Keyword detection tests pass for all 4 categories
-- [ ] Staleness detection tests pass for all 4 categories
-- [ ] `manas ask` appends a "Note: may be outdated" line when answering from a stale neuron
-- [ ] `cargo test -p manas-learn freshness` passes clean
+- [x] Keyword detection tests pass for all 4 categories
+- [x] Staleness detection tests pass for all 4 categories
+- [x] `manas ask` appends a "Note: may be outdated" line when answering from a stale neuron
+- [x] `cargo test -p manas-learn freshness` passes clean
+
+### Stage 12 Implementation Notes
+
+- Added `manas-learn::freshness` with `FreshnessCategory`,
+  `FreshnessWarning`, `detect_freshness`, and `is_stale`
+- Added `Trainer::learn_with_source_and_freshness` while keeping
+  `learn_with_source` backward compatible
+- `QueryResult` now carries optional freshness warning metadata
+- Added freshness coverage in `manas-learn`, `manas-cli`, and `manas-store`
 
 ---
 

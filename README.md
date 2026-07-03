@@ -129,8 +129,9 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 9 | `manas teach` and `manas ask` | Complete |
 | Stage 10 | File and folder ingestion | Complete |
 | Stage 11 | Importance scoring and promotion | Complete |
-| Stage 12 | Freshness system | Next |
-| Stage 13+ | The real demo, inspect, benchmarks, layer growth | Planned |
+| Stage 12 | Freshness system | Complete |
+| Stage 13 | The real demo | Next |
+| Stage 14+ | Inspect, benchmarks, layer growth | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -151,7 +152,9 @@ Stage 10 completes local ingestion so `manas teach` accepts raw text, a supporte
 file, or a folder of supported files while preserving local file source metadata
 inside the learned neurons. Stage 11 replaces activation-count-only promotion
 with weighted importance scoring based on frequency, recency, weight magnitude,
-and smooth age grace.
+and smooth age grace. Stage 12 classifies learned knowledge as Timeless, Slow,
+Fast, or Realtime and warns during `manas ask` when the answer comes from stale
+neuron metadata.
 
 Run the proof:
 
@@ -323,6 +326,27 @@ Every neuron stores:
 
 The entire brain — weights, vocab, metadata — is in this one file.
 `ask` reads the weights directly. No text search. No keyword matching.
+
+---
+
+## Freshness
+
+`manas teach` detects freshness from the taught text and stores the category on
+the best matching learned neuron:
+
+| Category | Examples | Stale after |
+|---|---|---|
+| Timeless | Definitions, proofs, laws | Never |
+| Slow | Historical facts, biographies | 365 days |
+| Fast | Software versions, news | 30 days |
+| Realtime | Stock prices, live scores | 1 day |
+
+When `manas ask` answers from a stale neuron, it appends a note such as:
+
+```text
+Note
+  This knowledge may be outdated (Fast freshness, learned 47 days ago).
+```
 
 ---
 

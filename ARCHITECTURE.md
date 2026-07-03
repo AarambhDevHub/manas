@@ -744,6 +744,16 @@ impl Trainer {
         source: Source,
     ) -> Result<LearnReport, ManasError> { ... }
 
+    // Teach one fact with explicit freshness metadata.
+    pub fn learn_with_source_and_freshness(
+        &mut self,
+        network: &mut Network,
+        input: &str,
+        target: &str,
+        source: Source,
+        freshness: FreshnessCategory,
+    ) -> Result<LearnReport, ManasError> { ... }
+
     // Ask the network a question. Returns best answer from weights.
     pub fn query(&mut self, network: &Network, question: &str)
         -> Result<QueryResult, ManasError> { ... }
@@ -767,6 +777,12 @@ pub struct QueryResult {
     pub answer: String,
     pub confidence: f32,          // 0.0 → 1.0
     pub answered_from: AnswerSource,
+    pub freshness_warning: Option<FreshnessWarning>,
+}
+
+pub struct FreshnessWarning {
+    pub category: FreshnessCategory,
+    pub age_days: u64,
 }
 
 pub enum AnswerSource {
@@ -1096,7 +1112,7 @@ Every neuron has a `freshness_category: u8`:
 The freshness category is detected automatically from the text content during `teach`:
 
 ```rust
-pub fn detect_freshness(text: &str) -> u8 {
+pub fn detect_freshness(text: &str) -> FreshnessCategory {
     // keywords like "theorem", "law", "always" → 0 (Timeless)
     // keywords like "today", "breaking", "live" → 3 (Realtime)
     // keywords like "released", "version" → 2 (Fast)
@@ -1113,6 +1129,9 @@ Answer
 
 Confidence
   0.81
+
+Answered from
+  neural weights
 
 Note
   This knowledge may be outdated (Fast freshness, learned 47 days ago).

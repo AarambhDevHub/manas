@@ -23,6 +23,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 9 — `manas-cli` v1: teach and ask.
 - Stage 10 — File and folder ingestion.
 - Stage 11 — Importance scoring and promotion.
+- Stage 12 — Freshness system.
 
 ### Added
 
@@ -66,10 +67,17 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Replaced activation-count-only promotion with importance-driven
   `Open -> Guarded -> Frozen` promotion and preserved importance metadata
   through `.manas` save/load.
+- Added `manas-learn::freshness` with Timeless, Slow, Fast, and Realtime
+  categories, keyword detection, age thresholds, and stale-neuron warnings.
+- `manas teach` now stamps freshness metadata on learned neurons, and
+  `manas ask` appends an outdated-knowledge note when the retrieved neuron is
+  stale.
+- Added freshness tests for detection, staleness, trainer query warnings, CLI
+  rendering, CLI teach metadata, and `.manas` persistence.
 
 ### Next
 
-- Stage 12 — Freshness system.
+- Stage 13 — The real demo.
 
 ---
 

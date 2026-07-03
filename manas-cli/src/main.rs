@@ -5,7 +5,9 @@ use std::process;
 
 use manas_core::Network;
 use manas_ingest::{IngestSource, ingest};
-use manas_learn::{AnswerSource, EncoderVocabEntry, LearnReport, Trainer};
+use manas_learn::{
+    AnswerSource, EncoderVocabEntry, FreshnessWarning, LearnReport, Trainer, detect_freshness,
+};
 use manas_store::{BrainState, ManasBrain, VocabEntry};
 
 const DEFAULT_BRAIN_PATH: &str = "brain.manas";
@@ -53,8 +55,15 @@ fn teach(brain_path: &Path, args: &[String]) -> Result<(), String> {
     for chunk in &chunks {
         for unit in teachable_units(&chunk.text) {
             let (input, target) = extract_association(&unit)?;
+            let freshness = detect_freshness(&unit);
             let report = trainer
-                .learn_with_source(&mut network, &input, &target, chunk.source.clone())
+                .learn_with_source_and_freshness(
+                    &mut network,
+                    &input,
+                    &target,
+                    chunk.source.clone(),
+                    freshness,
+                )
                 .map_err(|error| error.to_string())?;
             summary.record(&input, &target, &report);
         }
@@ -75,7 +84,12 @@ fn ask(brain_path: &Path, args: &[String]) -> Result<(), String> {
     let brain = ManasBrain::new(brain_path);
 
     if !brain.exists() {
-        print_answer("Not enough knowledge yet.", 0.0, AnswerSource::NotEnough);
+        print_answer(
+            "Not enough knowledge yet.",
+            0.0,
+            AnswerSource::NotEnough,
+            None,
+        );
         return Ok(());
     }
 
@@ -93,7 +107,12 @@ fn ask(brain_path: &Path, args: &[String]) -> Result<(), String> {
     let result = trainer
         .query(&state.network, &question)
         .map_err(|error| error.to_string())?;
-    print_answer(&result.answer, result.confidence, result.answered_from);
+    print_answer(
+        &result.answer,
+        result.confidence,
+        result.answered_from,
+        result.freshness_warning.as_ref(),
+    );
     Ok(())
 }
 
@@ -218,15 +237,50 @@ fn print_teach_report(summary: &TeachSummary) {
     );
 }
 
-fn print_answer(answer: &str, confidence: f32, source: AnswerSource) {
-    println!("Answer");
-    println!("  {answer}");
-    println!();
-    println!("Confidence");
-    println!("  {:.2}", confidence);
-    println!();
-    println!("Answered from");
-    println!("  {}", answer_source_label(source));
+fn print_answer(
+    answer: &str,
+    confidence: f32,
+    source: AnswerSource,
+    freshness_warning: Option<&FreshnessWarning>,
+) {
+    print!(
+        "{}",
+        render_answer(answer, confidence, source, freshness_warning)
+    );
+}
+
+fn render_answer(
+    answer: &str,
+    confidence: f32,
+    source: AnswerSource,
+    freshness_warning: Option<&FreshnessWarning>,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(&mut output, "Answer").expect("writing to String should not fail");
+    writeln!(&mut output, "  {answer}").expect("writing to String should not fail");
+    writeln!(&mut output).expect("writing to String should not fail");
+    writeln!(&mut output, "Confidence").expect("writing to String should not fail");
+    writeln!(&mut output, "  {:.2}", confidence).expect("writing to String should not fail");
+    writeln!(&mut output).expect("writing to String should not fail");
+    writeln!(&mut output, "Answered from").expect("writing to String should not fail");
+    writeln!(&mut output, "  {}", answer_source_label(source))
+        .expect("writing to String should not fail");
+
+    if let Some(warning) = freshness_warning {
+        writeln!(&mut output).expect("writing to String should not fail");
+        writeln!(&mut output, "Note").expect("writing to String should not fail");
+        writeln!(
+            &mut output,
+            "  This knowledge may be outdated ({} freshness, learned {} days ago).",
+            warning.category.label(),
+            warning.age_days
+        )
+        .expect("writing to String should not fail");
+    }
+
+    output
 }
 
 fn print_help() {
@@ -540,6 +594,7 @@ fn known_sidecar_paths(brain_path: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manas_learn::FreshnessCategory;
 
     #[test]
     fn extracts_simple_is_association() {
@@ -557,5 +612,36 @@ mod tests {
 
         assert_eq!(input, "Eiffel Tower");
         assert_eq!(target, "located in Paris France");
+    }
+
+    #[test]
+    fn render_answer_omits_note_without_freshness_warning() {
+        let output = render_answer("small animal", 0.91, AnswerSource::NeuralWeights, None);
+
+        assert!(output.contains("Answer\n  small animal"));
+        assert!(output.contains("Answered from\n  neural weights"));
+        assert!(!output.contains("Note"));
+    }
+
+    #[test]
+    fn render_answer_appends_stale_freshness_note() {
+        let warning = FreshnessWarning {
+            category: FreshnessCategory::Fast,
+            age_days: 47,
+        };
+
+        let output = render_answer(
+            "Rust 2.0 was released last month",
+            0.88,
+            AnswerSource::NeuralWeights,
+            Some(&warning),
+        );
+
+        assert!(output.contains("Note\n"));
+        assert!(
+            output.contains(
+                "  This knowledge may be outdated (Fast freshness, learned 47 days ago)."
+            )
+        );
     }
 }
