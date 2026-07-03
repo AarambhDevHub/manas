@@ -115,6 +115,28 @@ fn protection_levels_survive_save_load() {
 }
 
 #[test]
+fn importance_metadata_survives_save_load() {
+    let path = temp_path("importance");
+    let mut network = Network::new(32, 64, 32);
+    network.layers[0].neurons[0].importance_score = 0.875;
+    network.layers[0].neurons[0].born_at = 1_800_000_000;
+    network.layers[0].neurons[0].last_activated = 1_800_086_400;
+    network.layers[0].neurons[0].activation_count = 12_345;
+
+    let brain = ManasBrain::new(&path);
+    brain.save(&network).unwrap();
+    let loaded = brain.load().unwrap();
+    let loaded_neuron = &loaded.layers[0].neurons[0];
+
+    assert_eq!(loaded_neuron.importance_score, 0.875);
+    assert_eq!(loaded_neuron.born_at, 1_800_000_000);
+    assert_eq!(loaded_neuron.last_activated, 1_800_086_400);
+    assert_eq!(loaded_neuron.activation_count, 12_345);
+
+    cleanup(&path);
+}
+
+#[test]
 fn vocab_entries_survive_save_load() {
     let path = temp_path("vocab");
     let network = Network::new_empty(32);

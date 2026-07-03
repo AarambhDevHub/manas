@@ -2,14 +2,15 @@ use manas_core::{
     GROWTH_THRESHOLD, MAX_UPDATE_ATTEMPTS, ManasError, Network, ProtectionLevel, Source,
     TrainingExample,
 };
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backprop::{compute_gradients, cosine, mse_loss};
 use crate::decoder::decode_answer;
 use crate::encoder::Encoder;
+use crate::importance;
 
 const DEFAULT_EMBED_TABLE_SIZE: usize = 8192;
-const OPEN_TO_GUARDED_ACTIVATIONS: u64 = 500;
-const GUARDED_TO_FROZEN_ACTIVATIONS: u64 = 2_000;
 
 /// Encoded input-target fact used by Stage 3 training.
 #[derive(Clone, Debug)]
@@ -118,6 +119,8 @@ impl Trainer {
         source: Source,
     ) -> Result<LearnReport, ManasError> {
         let fact = self.encode_fact(input, target);
+        let now_secs = unix_now_secs();
+        let activation_counts_before = activation_counts_by_id(network);
         let loss_before = loss_for_fact(network, &fact)?;
         let mut loss_after = loss_before;
         let mut neurons_grown = 0;
@@ -155,7 +158,8 @@ impl Trainer {
             loss_after = loss_for_fact(network, &fact)?;
         }
 
-        let protection_report = self.update_protection_levels(network);
+        refresh_learning_metadata(network, &activation_counts_before, now_secs);
+        let protection_report = self.update_protection_levels_at(network, now_secs);
         assign_source_to_best_hidden(network, &fact.input, source);
 
         Ok(LearnReport {
@@ -171,26 +175,22 @@ impl Trainer {
     }
 
     pub fn update_protection_levels(&self, network: &mut Network) -> ProtectionReport {
+        self.update_protection_levels_at(network, unix_now_secs())
+    }
+
+    pub fn update_protection_levels_at(
+        &self,
+        network: &mut Network,
+        now_secs: u64,
+    ) -> ProtectionReport {
         let mut report = ProtectionReport::default();
 
         for layer in &mut network.layers {
             for neuron in &mut layer.neurons {
-                neuron.importance_score = (neuron.activation_count as f32
-                    / GUARDED_TO_FROZEN_ACTIVATIONS as f32)
-                    .clamp(0.0, 1.0);
-
                 let before = neuron.protection_level;
-                if neuron.activation_count >= GUARDED_TO_FROZEN_ACTIVATIONS {
-                    if !matches!(before, ProtectionLevel::Frozen) {
-                        neuron.freeze_all();
-                    }
-                } else if neuron.activation_count >= OPEN_TO_GUARDED_ACTIVATIONS
-                    && matches!(before, ProtectionLevel::Open)
-                {
-                    neuron.guard_all();
-                }
-
+                importance::promote_if_needed(neuron, now_secs);
                 let after = neuron.protection_level;
+
                 if after != before {
                     report.neurons_promoted = report.neurons_promoted.saturating_add(1);
                     if matches!(after, ProtectionLevel::Frozen) {
@@ -295,6 +295,46 @@ fn training_examples(facts: &[EncodedFact]) -> Vec<TrainingExample<'_>> {
 
 fn loss_for_fact(network: &Network, fact: &EncodedFact) -> Result<f32, ManasError> {
     mse_loss(&network.forward(&fact.input), &fact.target)
+}
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn activation_counts_by_id(network: &Network) -> HashMap<u64, u64> {
+    network
+        .layers
+        .iter()
+        .flat_map(|layer| layer.neurons.iter())
+        .map(|neuron| (neuron.id, neuron.activation_count))
+        .collect()
+}
+
+fn refresh_learning_metadata(
+    network: &mut Network,
+    activation_counts_before: &HashMap<u64, u64>,
+    now_secs: u64,
+) {
+    for neuron in network
+        .layers
+        .iter_mut()
+        .flat_map(|layer| layer.neurons.iter_mut())
+    {
+        if neuron.born_at == 0 {
+            neuron.born_at = now_secs;
+        }
+
+        let previous_count = activation_counts_before
+            .get(&neuron.id)
+            .copied()
+            .unwrap_or(0);
+        if neuron.activation_count > previous_count {
+            neuron.last_activated = now_secs;
+        }
+    }
 }
 
 fn not_enough() -> QueryResult {
@@ -498,11 +538,38 @@ mod tests {
     }
 
     #[test]
+    fn protection_update_uses_importance_thresholds_one_level_per_pass() {
+        let mut network = Network::new(32, 64, 32);
+        let now = unix_now_secs();
+        make_neuron_high_importance(&mut network.layers[0].neurons[0], now);
+        let trainer = Trainer::new(0.01);
+
+        let first_report = trainer.update_protection_levels_at(&mut network, now);
+
+        assert_eq!(first_report.neurons_promoted, 1);
+        assert_eq!(first_report.neurons_frozen, 0);
+        assert_eq!(
+            network.layers[0].neurons[0].protection_level,
+            ProtectionLevel::Guarded
+        );
+
+        let second_report = trainer.update_protection_levels_at(&mut network, now);
+
+        assert_eq!(second_report.neurons_promoted, 1);
+        assert_eq!(second_report.neurons_frozen, 1);
+        assert_eq!(
+            network.layers[0].neurons[0].protection_level,
+            ProtectionLevel::Frozen
+        );
+    }
+
+    #[test]
     fn protection_learn_report_records_transitions() {
         let mut network = Network::new(32, 64, 32);
-        network.layers[0].neurons[0].activation_count = OPEN_TO_GUARDED_ACTIVATIONS - 1;
+        let now = unix_now_secs();
+        make_neuron_high_importance(&mut network.layers[0].neurons[0], now);
+        make_neuron_high_importance(&mut network.layers[0].neurons[1], now);
         network.layers[0].neurons[1].guard_all();
-        network.layers[0].neurons[1].activation_count = GUARDED_TO_FROZEN_ACTIVATIONS - 1;
         let mut trainer = Trainer::new(0.01);
         trainer.growth_threshold = f32::MAX;
 
@@ -517,6 +584,37 @@ mod tests {
         assert_eq!(
             network.layers[0].neurons[1].protection_level,
             ProtectionLevel::Frozen
+        );
+    }
+
+    #[test]
+    fn importance_metadata_is_stamped_during_learning() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer.learn(&mut network, "cat", "animal").unwrap();
+        trainer.learn(&mut network, "cat", "animal").unwrap();
+
+        assert!(
+            network
+                .layers
+                .iter()
+                .flat_map(|layer| layer.neurons.iter())
+                .all(|neuron| neuron.born_at > 0)
+        );
+        assert!(
+            network
+                .layers
+                .iter()
+                .flat_map(|layer| layer.neurons.iter())
+                .any(|neuron| neuron.last_activated > 0)
+        );
+        assert!(
+            network
+                .layers
+                .iter()
+                .flat_map(|layer| layer.neurons.iter())
+                .any(|neuron| neuron.importance_score > 0.0)
         );
     }
 
@@ -573,5 +671,14 @@ mod tests {
                 .iter()
                 .any(|neuron| neuron.source == source)
         );
+    }
+
+    fn make_neuron_high_importance(neuron: &mut manas_core::Neuron, now_secs: u64) {
+        neuron.activation_count = 10_000;
+        neuron.last_activated = now_secs;
+        neuron.born_at = now_secs;
+        for weight in &mut neuron.weights {
+            *weight = 10.0;
+        }
     }
 }
