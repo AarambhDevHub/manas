@@ -243,7 +243,7 @@ the associated concepts.
 **Learning:**
 ```
 input_vec  = encode("cat")
-target_vec = encode("small domesticated animal with fur and whiskers")
+target_vec = pack_answer_words("small domesticated animal with fur and whiskers")
 loss       = mse(network.forward(input_vec), target_vec)
 gradients  = backprop(loss)
 update weights (respecting protection levels)
@@ -252,8 +252,8 @@ update weights (respecting protection levels)
 **Querying:**
 ```
 question_vec = encode("What is a cat")
-output_vec   = network.forward(question_vec)
-answer       = decode(output_vec)  → find nearest known tokens
+output_vec   = read best hidden output column
+answer       = decode(output_vec)  → recover packed known answer words
 ```
 
 ### Why This Stores Knowledge in Weights
@@ -1017,7 +1017,7 @@ manas teach "A cat is a small domesticated animal with fur and whiskers."
   3. manas-ingest: chunk (single chunk, text is short)
   4. manas-learn: tokenize chunk → token IDs
   5. manas-learn: embed with positional encoding → input_vec (Vec<f32>)
-  6. manas-learn: build decode-friendly answer vector from meaningful target words
+  6. manas-learn: pack meaningful answer word IDs into target_vec
   7. manas-core: grow or reuse an Open keyed hidden neuron
   8. manas-core: bind the hidden neuron to input_vec and write target_vec into its output column
   9. manas-learn: update importance, source, freshness, and protection metadata
@@ -1034,7 +1034,7 @@ manas ask "What is a cat?"
   2. manas-learn: build query variants such as "cat" from "What is a cat?"
   3. manas-learn: encode each query variant → question_vec (Vec<f32>)
   4. manas-core: select best activated hidden neuron and read only its output column
-  5. manas-learn: confidence = decoded answer score × hidden activation
+  5. manas-learn: decode packed answer word IDs and score by hidden activation
   6. confidence > MIN_CONFIDENCE?
        → yes: decode(output_vec) → "small domesticated animal with fur and whiskers"
               answered_from = AnswerSource::NeuralWeights

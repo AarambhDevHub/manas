@@ -157,7 +157,7 @@ and smooth age grace. Stage 12 classifies learned knowledge as Timeless, Slow,
 Fast, or Realtime and warns during `manas ask` when the answer comes from stale
 neuron metadata. Stage 13 adds the full 22-fact proof: the demo teaches facts,
 deletes historical sidecars, and verifies that five questions answer from neural
-weights only.
+weights only with compact decoded answer words.
 
 Run the proof:
 
