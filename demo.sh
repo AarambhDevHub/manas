@@ -87,34 +87,45 @@ require_neural_answer() {
   fi
 }
 
-require_all_words() {
-  local output
-  output="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
+answer_text() {
+  awk 'found { print; exit } $0 == "Answer" { found = 1 }' <<<"$1" | tr '[:upper:]' '[:lower:]'
+}
+
+require_clean_answer() {
+  local output="$1"
   shift
-  for word in "$@"; do
-    if ! grep -q "$word" <<<"$output"; then
-      echo "answer missed required word '$word':" >&2
+  local answer
+  answer="$(answer_text "$output")"
+  if [[ -z "$answer" ]]; then
+    echo "answer line was missing:" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+
+  local expected
+  for expected in "$@"; do
+    if ! grep -qw "$expected" <<<"$answer"; then
+      echo "answer missed required word '$expected':" >&2
       echo "$output" >&2
       exit 1
     fi
   done
-}
 
-require_two_words() {
-  local output
-  output="$(tr '[:upper:]' '[:lower:]' <<<"$1")"
-  shift
-  local count=0
-  for word in "$@"; do
-    if grep -q "$word" <<<"$output"; then
-      count=$((count + 1))
+  local word
+  for word in $answer; do
+    local allowed=0
+    for expected in "$@"; do
+      if [[ "$word" == "$expected" ]]; then
+        allowed=1
+        break
+      fi
+    done
+    if (( allowed == 0 )); then
+      echo "answer included unexpected word '$word':" >&2
+      echo "$output" >&2
+      exit 1
     fi
   done
-  if (( count < 2 )); then
-    echo "answer matched only $count keywords from: $*" >&2
-    echo "$output" >&2
-    exit 1
-  fi
 }
 
 ask_and_print() {
@@ -129,27 +140,27 @@ echo "=== Asking: must answer from neural weights ==="
 cat_answer="$(ask_and_print "What is a cat?")"
 echo "$cat_answer"
 require_neural_answer "$cat_answer"
-require_two_words "$cat_answer" small domesticated animal fur whiskers
+require_clean_answer "$cat_answer" small domesticated animal fur whiskers
 
 eiffel_answer="$(ask_and_print "Where is the Eiffel Tower?")"
 echo "$eiffel_answer"
 require_neural_answer "$eiffel_answer"
-require_two_words "$eiffel_answer" paris france 1889
+require_clean_answer "$eiffel_answer" located paris france built 1889
 
 einstein_answer="$(ask_and_print "What did Einstein develop?")"
 echo "$einstein_answer"
 require_neural_answer "$einstein_answer"
-require_all_words "$einstein_answer" theory relativity
+require_clean_answer "$einstein_answer" theory relativity early 20th century
 
 mitochondria_answer="$(ask_and_print "What is the mitochondria?")"
 echo "$mitochondria_answer"
 require_neural_answer "$mitochondria_answer"
-require_all_words "$mitochondria_answer" powerhouse cell
+require_clean_answer "$mitochondria_answer" powerhouse cell biology
 
 bitcoin_answer="$(ask_and_print "When was Bitcoin created?")"
 echo "$bitcoin_answer"
 require_neural_answer "$bitcoin_answer"
-require_two_words "$bitcoin_answer" satoshi nakamoto 2009
+require_clean_answer "$bitcoin_answer" satoshi nakamoto launched january 2009
 
 brain_size="$(wc -c < brain.manas)"
 if (( brain_size >= MAX_BRAIN_BYTES )); then

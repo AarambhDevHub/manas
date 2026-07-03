@@ -77,8 +77,9 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rendering, CLI teach metadata, and `.manas` persistence.
 - Added bound hidden-neuron readout so sequentially learned facts retrieve from
   their own neural output columns instead of drifting toward the latest fact.
-- Added decode-friendly answer vectors for learned targets and query variants
-  for natural questions like "Where is the Eiffel Tower?"
+- Added packed answer-word codes in neural output weights plus query variants
+  for natural questions like "Where is the Eiffel Tower?", producing compact
+  learned answers without unrelated vocabulary filler.
 - Added `demo.sh` plus the Stage 13 CLI integration test that teaches 22 facts,
   deletes all historical sidecars, verifies five neural-weight answers, and
   enforces the sub-500KB brain size gate.

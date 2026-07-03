@@ -6,6 +6,9 @@ use crate::embedder::Embedder;
 use crate::tokenizer::Tokenizer;
 
 const DEFAULT_TABLE_SIZE: usize = 8192;
+pub(crate) const ANSWER_CODEC_MARKER: f32 = -1.0;
+pub(crate) const ANSWER_COUNT_SCALE: f32 = 32.0;
+pub(crate) const ANSWER_ID_SCALE: f32 = 4096.0;
 
 /// Deterministic tokenizer-backed encoder for Stage 6.
 pub struct Encoder {
@@ -45,12 +48,30 @@ impl Encoder {
         }
 
         let mut encoded = vec![0.0; self.dim()];
-        for word in words {
-            let word_vector = self.encode(&word);
-            for (encoded_value, word_value) in encoded.iter_mut().zip(word_vector.iter()) {
-                *encoded_value += word_value;
-            }
+        if encoded.len() < 3 {
+            return self.encode(text);
         }
+
+        let max_words = encoded.len().saturating_sub(2);
+        let word_ids = words
+            .into_iter()
+            .take(max_words)
+            .filter_map(|word| {
+                let _ = self.encode(&word);
+                self.tokenizer.vocab.get(&format!("#{word}")).copied()
+            })
+            .collect::<Vec<_>>();
+
+        if word_ids.is_empty() {
+            return encoded;
+        }
+
+        encoded[0] = ANSWER_CODEC_MARKER;
+        encoded[1] = word_ids.len() as f32 / ANSWER_COUNT_SCALE;
+        for (slot, word_id) in word_ids.into_iter().enumerate() {
+            encoded[slot + 2] = word_id.saturating_add(1) as f32 / ANSWER_ID_SCALE;
+        }
+
         encoded
     }
 
@@ -140,6 +161,17 @@ impl Encoder {
             .collect::<Vec<_>>();
         words.sort();
         words.dedup();
+        words
+    }
+
+    pub fn known_word_ids(&self) -> Vec<(u32, String)> {
+        let mut words = self
+            .tokenizer
+            .id_to_token
+            .iter()
+            .filter_map(|(id, token)| token.strip_prefix('#').map(|word| (*id, word.to_string())))
+            .collect::<Vec<_>>();
+        words.sort_by_key(|(id, _)| *id);
         words
     }
 

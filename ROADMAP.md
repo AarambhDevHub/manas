@@ -1755,8 +1755,8 @@ Search results from DuckDuckGo...
 
 - Added bound hidden-neuron readout in `manas-core` so each learned fact keeps
   its own neural output column
-- Added decode-friendly answer vectors and question variants in `manas-learn`
-  so natural questions retrieve the intended keyed fact
+- Added packed answer-word codes and question variants in `manas-learn` so
+  natural questions retrieve compact learned answers from the intended keyed fact
 - Added `demo.sh` and `manas-cli/tests/stage13_demo.rs` as the permanent
   22-fact proof
 - Current proof result: `bash demo.sh` passes with `brain.manas` at about 83KB

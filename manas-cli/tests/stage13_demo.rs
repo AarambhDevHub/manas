@@ -32,35 +32,35 @@ const DEMO_FACTS: &[&str] = &[
 
 struct DemoQuestion {
     question: &'static str,
-    any_groups: &'static [&'static [&'static str]],
-    all_words: &'static [&'static str],
+    required_words: &'static [&'static str],
+    allowed_words: &'static [&'static str],
 }
 
 const DEMO_QUESTIONS: &[DemoQuestion] = &[
     DemoQuestion {
         question: "What is a cat?",
-        any_groups: &[&["small", "domesticated", "animal", "fur", "whiskers"]],
-        all_words: &[],
+        required_words: &["small", "domesticated", "animal", "fur", "whiskers"],
+        allowed_words: &["small", "domesticated", "animal", "fur", "whiskers"],
     },
     DemoQuestion {
         question: "Where is the Eiffel Tower?",
-        any_groups: &[&["paris", "france", "1889"]],
-        all_words: &[],
+        required_words: &["located", "paris", "france", "built", "1889"],
+        allowed_words: &["located", "paris", "france", "built", "1889"],
     },
     DemoQuestion {
         question: "What did Einstein develop?",
-        any_groups: &[],
-        all_words: &["theory", "relativity"],
+        required_words: &["theory", "relativity", "early", "20th", "century"],
+        allowed_words: &["theory", "relativity", "early", "20th", "century"],
     },
     DemoQuestion {
         question: "What is the mitochondria?",
-        any_groups: &[],
-        all_words: &["powerhouse", "cell"],
+        required_words: &["powerhouse", "cell", "biology"],
+        allowed_words: &["powerhouse", "cell", "biology"],
     },
     DemoQuestion {
         question: "When was Bitcoin created?",
-        any_groups: &[&["satoshi", "nakamoto", "2009"]],
-        all_words: &[],
+        required_words: &["satoshi", "nakamoto", "launched", "january", "2009"],
+        allowed_words: &["satoshi", "nakamoto", "launched", "january", "2009"],
     },
 ];
 
@@ -119,26 +119,48 @@ fn stage13_real_demo_answers_from_neural_weights_only() {
 }
 
 fn assert_keywords(output: &str, question: &DemoQuestion) {
-    let normalized = output.to_lowercase();
-    for word in question.all_words {
+    let answer_words = answer_words(output);
+    assert!(
+        !answer_words.is_empty(),
+        "answer to '{}' had no answer words:\n{output}",
+        question.question
+    );
+    assert!(
+        answer_words.len() <= question.allowed_words.len(),
+        "answer to '{}' had extra words {answer_words:?}:\n{output}",
+        question.question
+    );
+
+    for word in question.required_words {
         assert!(
-            normalized.contains(word),
+            answer_words.iter().any(|answer_word| answer_word == word),
             "answer to '{}' missed '{word}':\n{output}",
             question.question
         );
     }
 
-    for group in question.any_groups {
-        let matches = group
-            .iter()
-            .filter(|word| normalized.contains(**word))
-            .count();
+    for word in &answer_words {
         assert!(
-            matches >= 2,
-            "answer to '{}' matched only {matches} keywords from {group:?}:\n{output}",
+            question.allowed_words.contains(&word.as_str()),
+            "answer to '{}' included unexpected word '{word}':\n{output}",
             question.question
         );
     }
+}
+
+fn answer_words(output: &str) -> Vec<String> {
+    let mut lines = output.lines();
+    while let Some(line) = lines.next() {
+        if line.trim() == "Answer" {
+            return lines
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|word| word.to_lowercase())
+                .collect();
+        }
+    }
+    Vec::new()
 }
 
 fn remove_sidecars(dir: &Path) {
