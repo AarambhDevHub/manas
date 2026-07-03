@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use manas_core::Source;
 use manas_learn::FreshnessCategory;
-use manas_store::ManasBrain;
+use manas_store::{BrainState, ManasBrain};
 
 #[test]
 fn cli_teach_ask_inspect_and_reset_work_across_processes() {
@@ -45,6 +45,112 @@ fn cli_teach_ask_inspect_and_reset_work_across_processes() {
     let reset = run(&dir, &["reset"]);
     assert_success(&reset);
     assert!(!dir.join("brain.manas").exists());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_stage14_inspect_neurons_and_trace_work() {
+    let dir = temp_dir("stage14-debug");
+
+    let teach = run(
+        &dir,
+        &[
+            "teach",
+            "A cat is a small domesticated animal with fur and whiskers.",
+        ],
+    );
+    assert_success(&teach);
+
+    let inspect = run(&dir, &["inspect"]);
+    assert_success(&inspect);
+    let inspect_stdout = stdout(&inspect);
+    for expected in [
+        "Brain",
+        "format version",
+        "created",
+        "last modified",
+        "Network",
+        "Learning",
+        "facts taught",
+        "Freshness",
+        "Sources",
+        "Layers",
+    ] {
+        assert!(inspect_stdout.contains(expected), "{inspect_stdout}");
+    }
+
+    let neurons = run(&dir, &["neurons", "--protection", "open"]);
+    assert_success(&neurons);
+    let neurons_stdout = stdout(&neurons);
+    assert!(neurons_stdout.contains("Neurons"), "{neurons_stdout}");
+    assert!(
+        neurons_stdout.contains("protection filter     : open"),
+        "{neurons_stdout}"
+    );
+    assert!(neurons_stdout.contains("importance"), "{neurons_stdout}");
+    assert!(neurons_stdout.contains("raw text"), "{neurons_stdout}");
+
+    let trace = run(&dir, &["trace", "What is a cat?", "--limit", "3"]);
+    assert_success(&trace);
+    let trace_stdout = stdout(&trace);
+    for expected in [
+        "Trace",
+        "selected variant",
+        "Variants",
+        "Top hidden activations",
+        "Top output values",
+        "Answered from\n  neural weights",
+    ] {
+        assert!(trace_stdout.contains(expected), "{trace_stdout}");
+    }
+    assert!(
+        trace_stdout.contains("animal") || trace_stdout.contains("fur"),
+        "{trace_stdout}"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_neurons_filters_by_protection_and_source() {
+    let dir = temp_dir("stage14-filters");
+    let notes = dir.join("notes.txt");
+    fs::write(
+        &notes,
+        "A cat is a small domesticated animal with fur and whiskers.",
+    )
+    .unwrap();
+    let notes_arg = notes.to_string_lossy().into_owned();
+
+    let teach = run(&dir, &["teach", &notes_arg]);
+    assert_success(&teach);
+
+    let brain = ManasBrain::new(dir.join("brain.manas"));
+    let mut state = brain.load_state().unwrap();
+    state.network.layers[0].neurons[0].freeze_all();
+    brain
+        .save_state(&BrainState::new(state.network, state.vocab_entries))
+        .unwrap();
+
+    let frozen = run(&dir, &["neurons", "--protection", "frozen"]);
+    assert_success(&frozen);
+    let frozen_stdout = stdout(&frozen);
+    assert!(
+        frozen_stdout.contains("protection filter     : frozen"),
+        "{frozen_stdout}"
+    );
+    assert!(frozen_stdout.contains("frozen"), "{frozen_stdout}");
+    assert!(frozen_stdout.contains("notes.txt"), "{frozen_stdout}");
+
+    let source = run(&dir, &["neurons", "--source", "notes.txt"]);
+    assert_success(&source);
+    let source_stdout = stdout(&source);
+    assert!(
+        source_stdout.contains("source filter         : notes.txt"),
+        "{source_stdout}"
+    );
+    assert!(source_stdout.contains("notes.txt"), "{source_stdout}");
 
     fs::remove_dir_all(dir).unwrap();
 }

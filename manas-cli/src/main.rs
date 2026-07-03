@@ -2,11 +2,14 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use manas_core::Network;
+use manas_core::{Activation, Network, ProtectionLevel};
 use manas_ingest::{IngestSource, ingest};
 use manas_learn::{
-    AnswerSource, EncoderVocabEntry, FreshnessWarning, LearnReport, Trainer, detect_freshness,
+    AnswerSource, BrainDiagnostics, EncoderVocabEntry, FreshnessWarning, LearnReport,
+    NeuronDiagnostics, NeuronFilter, QueryTrace, Trainer, detect_freshness,
+    filtered_neuron_diagnostics, trace_query,
 };
 use manas_store::{BrainState, ManasBrain, VocabEntry};
 
@@ -14,6 +17,8 @@ const DEFAULT_BRAIN_PATH: &str = "brain.manas";
 const DEFAULT_LEARNING_RATE: f32 = 0.01;
 const DEFAULT_EMBED_DIM: usize = 32;
 const DEFAULT_SEED: u64 = 42;
+const DEFAULT_TRACE_LIMIT: usize = 8;
+const MAX_TRACE_LIMIT: usize = 100;
 
 fn main() {
     if let Err(error) = run_cli(env::args().skip(1), Path::new(DEFAULT_BRAIN_PATH)) {
@@ -37,6 +42,8 @@ where
         "teach" => teach(brain_path, &args[1..]),
         "ask" => ask(brain_path, &args[1..]),
         "inspect" => inspect(brain_path),
+        "neurons" => neurons(brain_path, &args[1..]),
+        "trace" => trace(brain_path, &args[1..]),
         "reset" => reset(brain_path),
         "help" | "--help" | "-h" => {
             print_help();
@@ -120,42 +127,178 @@ fn inspect(brain_path: &Path) -> Result<(), String> {
     let brain = ManasBrain::new(brain_path);
 
     if !brain.exists() {
-        println!("Brain");
-        println!("  file                  : {}", brain_path.display());
-        println!("  exists                : no");
-        println!("  size bytes            : 0");
-        println!();
-        println!("Network");
-        println!("  total neurons         : 0");
-        println!("  total layers          : 0");
-        println!("  open neurons          : 0");
-        println!("  guarded neurons       : 0");
-        println!("  frozen neurons        : 0");
+        print_empty_inspect(brain_path);
         return Ok(());
     }
 
     let state = brain.load_state().map_err(|error| error.to_string())?;
+    let diagnostics = BrainDiagnostics::from_network(&state.network, unix_now_secs());
+
     println!("Brain");
     println!("  file                  : {}", brain_path.display());
     println!("  exists                : yes");
     println!("  size bytes            : {}", brain.size_bytes());
+    println!(
+        "  size                  : {}",
+        human_size(brain.size_bytes())
+    );
+    println!(
+        "  format version        : {}",
+        state.metadata.format_version
+    );
+    println!(
+        "  created               : {}",
+        format_unix_date(state.metadata.created_at)
+    );
+    println!(
+        "  last modified         : {}",
+        format_unix_date(state.metadata.modified_at)
+    );
     println!("  vocab entries         : {}", state.vocab_entries.len());
     println!();
     println!("Network");
-    println!("  total neurons         : {}", state.network.neuron_count());
-    println!("  total layers          : {}", state.network.layer_count());
+    println!(
+        "  total neurons         : {}",
+        diagnostics.network.total_neurons
+    );
+    println!(
+        "  total layers          : {}",
+        diagnostics.network.total_layers
+    );
     println!(
         "  open neurons          : {}",
-        state.network.open_neuron_count()
+        diagnostics.network.open_neurons
     );
     println!(
         "  guarded neurons       : {}",
-        state.network.guarded_neuron_count()
+        diagnostics.network.guarded_neurons
     );
     println!(
         "  frozen neurons        : {}",
-        state.network.frozen_neuron_count()
+        diagnostics.network.frozen_neurons
     );
+    println!("  input dim             : {}", state.network.input_dim);
+    println!("  output dim            : {}", state.network.output_dim);
+    println!();
+    println!("Learning");
+    println!(
+        "  facts taught          : {}",
+        diagnostics.learning.facts_taught
+    );
+    println!(
+        "  total learn calls     : {}",
+        diagnostics.learning.total_learn_calls
+    );
+    println!(
+        "  neurons grown         : {}",
+        diagnostics.learning.neurons_grown
+    );
+    println!(
+        "  layers grown          : {}",
+        diagnostics.learning.layers_grown
+    );
+    println!();
+    println!("Freshness");
+    println!(
+        "  timeless neurons      : {}",
+        diagnostics.freshness.timeless_neurons
+    );
+    println!(
+        "  slow neurons          : {}",
+        diagnostics.freshness.slow_neurons
+    );
+    println!(
+        "  fast neurons          : {}",
+        diagnostics.freshness.fast_neurons
+    );
+    println!(
+        "  realtime neurons      : {}",
+        diagnostics.freshness.realtime_neurons
+    );
+    println!(
+        "  stale neurons         : {}",
+        diagnostics.freshness.stale_neurons
+    );
+    println!();
+    println!("Sources");
+    println!(
+        "  raw text neurons      : {}",
+        diagnostics.sources.raw_text_neurons
+    );
+    println!(
+        "  local file neurons    : {}",
+        diagnostics.sources.local_file_neurons
+    );
+    println!(
+        "  unknown neurons       : {}",
+        diagnostics.sources.unknown_neurons
+    );
+    println!();
+    println!("Layers");
+    for layer in diagnostics.layers {
+        println!(
+            "  layer {} id={} activation={} neurons={} open={} guarded={} frozen={}",
+            layer.layer_index,
+            layer.layer_id,
+            activation_label(layer.activation),
+            layer.neurons,
+            layer.open_neurons,
+            layer.guarded_neurons,
+            layer.frozen_neurons
+        );
+    }
+    Ok(())
+}
+
+fn neurons(brain_path: &Path, args: &[String]) -> Result<(), String> {
+    let filter = neuron_filter(args)?;
+    let brain = ManasBrain::new(brain_path);
+
+    if !brain.exists() {
+        println!("Neurons");
+        println!("  brain                 : missing");
+        println!("  count                 : 0");
+        return Ok(());
+    }
+
+    let state = brain.load_state().map_err(|error| error.to_string())?;
+    let rows = filtered_neuron_diagnostics(&state.network, unix_now_secs(), &filter);
+    print_neurons(&rows, &filter);
+    Ok(())
+}
+
+fn trace(brain_path: &Path, args: &[String]) -> Result<(), String> {
+    let request = trace_request(args)?;
+    let brain = ManasBrain::new(brain_path);
+
+    if !brain.exists() {
+        let trace = QueryTrace {
+            question: request.question,
+            answer: "Not enough knowledge yet.".to_string(),
+            confidence: 0.0,
+            answered_from: AnswerSource::NotEnough,
+            selected_variant: None,
+            variants: Vec::new(),
+            top_hidden_activations: Vec::new(),
+            top_output_values: Vec::new(),
+        };
+        print_trace(&trace);
+        return Ok(());
+    }
+
+    let state = brain.load_state().map_err(|error| error.to_string())?;
+    let mut trainer = Trainer::with_seed(
+        DEFAULT_SEED,
+        state.network.input_dim.max(1),
+        DEFAULT_LEARNING_RATE,
+    );
+    trainer
+        .encoder
+        .import_vocab(&to_encoder_entries(&state.vocab_entries))
+        .map_err(|error| error.to_string())?;
+
+    let trace = trace_query(&trainer, &state.network, &request.question, request.limit);
+    print_trace(&trace);
     Ok(())
 }
 
@@ -191,10 +334,7 @@ fn load_or_create_runtime(brain_path: &Path) -> Result<(Network, Trainer), Strin
 }
 
 fn save_runtime(brain_path: &Path, network: Network, trainer: &Trainer) -> Result<(), String> {
-    let state = BrainState {
-        network,
-        vocab_entries: to_store_entries(trainer.encoder.export_vocab()),
-    };
+    let state = BrainState::new(network, to_store_entries(trainer.encoder.export_vocab()));
     ManasBrain::new(brain_path)
         .save_state(&state)
         .map_err(|error| error.to_string())
@@ -290,7 +430,336 @@ fn print_help() {
     println!("  manas teach <text|file|folder> [--recursive]");
     println!("  manas ask <question>");
     println!("  manas inspect");
+    println!("  manas neurons [--protection open|guarded|frozen] [--source <text>]");
+    println!("  manas trace <question> [--limit N]");
     println!("  manas reset");
+}
+
+fn print_empty_inspect(brain_path: &Path) {
+    println!("Brain");
+    println!("  file                  : {}", brain_path.display());
+    println!("  exists                : no");
+    println!("  size bytes            : 0");
+    println!("  size                  : 0 B");
+    println!("  format version        : 0");
+    println!("  created               : unknown");
+    println!("  last modified         : unknown");
+    println!("  vocab entries         : 0");
+    println!();
+    println!("Network");
+    println!("  total neurons         : 0");
+    println!("  total layers          : 0");
+    println!("  open neurons          : 0");
+    println!("  guarded neurons       : 0");
+    println!("  frozen neurons        : 0");
+    println!("  input dim             : 0");
+    println!("  output dim            : 0");
+    println!();
+    println!("Learning");
+    println!("  facts taught          : 0");
+    println!("  total learn calls     : 0");
+    println!("  neurons grown         : 0");
+    println!("  layers grown          : 0");
+    println!();
+    println!("Freshness");
+    println!("  timeless neurons      : 0");
+    println!("  slow neurons          : 0");
+    println!("  fast neurons          : 0");
+    println!("  realtime neurons      : 0");
+    println!("  stale neurons         : 0");
+    println!();
+    println!("Sources");
+    println!("  raw text neurons      : 0");
+    println!("  local file neurons    : 0");
+    println!("  unknown neurons       : 0");
+    println!();
+    println!("Layers");
+    println!("  none");
+}
+
+fn print_neurons(rows: &[NeuronDiagnostics], filter: &NeuronFilter) {
+    println!("Neurons");
+    println!("  count                 : {}", rows.len());
+    println!(
+        "  protection filter     : {}",
+        filter.protection.map(protection_label).unwrap_or("all")
+    );
+    println!(
+        "  source filter         : {}",
+        filter.source_contains.as_deref().unwrap_or("all")
+    );
+    println!();
+
+    if rows.is_empty() {
+        println!("  none");
+        return;
+    }
+
+    println!(
+        "  {:<5} {:<5} {:<6} {:<10} {:<10} {:>10} {:>11} {:<10} {:<5} source",
+        "layer",
+        "index",
+        "id",
+        "activation",
+        "protection",
+        "importance",
+        "activations",
+        "freshness",
+        "stale"
+    );
+    for row in rows {
+        println!(
+            "  {:<5} {:<5} {:<6} {:<10} {:<10} {:>10.4} {:>11} {:<10} {:<5} {}",
+            row.layer_index,
+            row.neuron_index,
+            row.neuron_id,
+            activation_label(row.activation),
+            protection_label(row.protection),
+            row.importance_score,
+            row.activation_count,
+            row.freshness.label(),
+            yes_no(row.stale),
+            row.source_label
+        );
+    }
+}
+
+fn print_trace(trace: &QueryTrace) {
+    println!("Trace");
+    println!("  question              : {}", trace.question);
+    println!(
+        "  selected variant      : {}",
+        trace.selected_variant.as_deref().unwrap_or("none")
+    );
+    println!();
+    println!("Variants");
+    if trace.variants.is_empty() {
+        println!("  none");
+    } else {
+        println!(
+            "  {:<9} {:<7} {:<8} {:<8} {:>10} {:>10} answer",
+            "selected", "encoded", "hidden", "id", "activation", "score"
+        );
+        for variant in &trace.variants {
+            println!(
+                "  {:<9} {:<7} {:<8} {:<8} {:>10.4} {:>10.4} {}",
+                yes_no(variant.selected),
+                yes_no(variant.encoded),
+                optional_usize(variant.hidden_index),
+                optional_u64(variant.hidden_neuron_id),
+                variant.hidden_activation,
+                variant.score,
+                variant.decoded_answer.as_deref().unwrap_or("")
+            );
+            println!("    variant             : {}", variant.text);
+        }
+    }
+    println!();
+    println!("Top hidden activations");
+    if trace.top_hidden_activations.is_empty() {
+        println!("  none");
+    } else {
+        println!(
+            "  {:<5} {:<5} {:<6} {:<10} {:>10} source",
+            "layer", "index", "id", "protect", "activation"
+        );
+        for row in &trace.top_hidden_activations {
+            println!(
+                "  {:<5} {:<5} {:<6} {:<10} {:>10.4} {}",
+                row.layer_index,
+                row.neuron_index,
+                row.neuron_id,
+                protection_label(row.protection),
+                row.activation,
+                row.source_label
+            );
+        }
+    }
+    println!();
+    println!("Top output values");
+    if trace.top_output_values.is_empty() {
+        println!("  none");
+    } else {
+        println!("  {:<6} {:<8} {:>10}", "index", "id", "value");
+        for row in &trace.top_output_values {
+            println!(
+                "  {:<6} {:<8} {:>10.4}",
+                row.output_index,
+                optional_u64(row.neuron_id),
+                row.value
+            );
+        }
+    }
+    println!();
+    print!(
+        "{}",
+        render_answer(&trace.answer, trace.confidence, trace.answered_from, None)
+    );
+}
+
+fn neuron_filter(args: &[String]) -> Result<NeuronFilter, String> {
+    let mut filter = NeuronFilter::default();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--protection" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--protection requires a value".to_string())?;
+                filter.protection = Some(parse_protection(value)?);
+            }
+            "--source" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--source requires a value".to_string())?;
+                if value.trim().is_empty() {
+                    return Err("--source cannot be empty".to_string());
+                }
+                filter.source_contains = Some(value.trim().to_string());
+            }
+            option if option.starts_with("--") => {
+                return Err(format!("unknown neurons option '{option}'"));
+            }
+            value => return Err(format!("unexpected neurons argument '{value}'")),
+        }
+        index += 1;
+    }
+
+    Ok(filter)
+}
+
+struct TraceRequest {
+    question: String,
+    limit: usize,
+}
+
+fn trace_request(args: &[String]) -> Result<TraceRequest, String> {
+    let mut limit = DEFAULT_TRACE_LIMIT;
+    let mut question_parts = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--limit" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--limit requires a value".to_string())?;
+                limit = value
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid --limit value '{value}'"))?;
+                if !(1..=MAX_TRACE_LIMIT).contains(&limit) {
+                    return Err(format!("--limit must be between 1 and {MAX_TRACE_LIMIT}"));
+                }
+            }
+            option if option.starts_with("--") => {
+                return Err(format!("unknown trace option '{option}'"));
+            }
+            value => question_parts.push(value.to_string()),
+        }
+        index += 1;
+    }
+
+    Ok(TraceRequest {
+        question: joined_text(&question_parts)?,
+        limit,
+    })
+}
+
+fn parse_protection(value: &str) -> Result<ProtectionLevel, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "open" => Ok(ProtectionLevel::Open),
+        "guarded" => Ok(ProtectionLevel::Guarded),
+        "frozen" => Ok(ProtectionLevel::Frozen),
+        _ => Err(format!(
+            "invalid protection '{value}', expected open, guarded, or frozen"
+        )),
+    }
+}
+
+fn activation_label(activation: Activation) -> &'static str {
+    match activation {
+        Activation::ReLU => "relu",
+        Activation::Sigmoid => "sigmoid",
+        Activation::Tanh => "tanh",
+        Activation::Linear => "linear",
+        Activation::Keyed => "keyed",
+    }
+}
+
+fn protection_label(protection: ProtectionLevel) -> &'static str {
+    match protection {
+        ProtectionLevel::Open => "open",
+        ProtectionLevel::Guarded => "guarded",
+        ProtectionLevel::Frozen => "frozen",
+    }
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn optional_usize(value: Option<usize>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn optional_u64(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / KB)
+    } else {
+        format!("{:.1} MB", bytes as f64 / MB)
+    }
+}
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn format_unix_date(timestamp: u64) -> String {
+    if timestamp == 0 {
+        return "unknown".to_string();
+    }
+
+    let days = (timestamp / 86_400) as i64;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_part = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_part + 2) / 5 + 1;
+    let month = month_part + if month_part < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+
+    (year, month, day)
 }
 
 fn answer_source_label(source: AnswerSource) -> &'static str {

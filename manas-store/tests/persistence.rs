@@ -175,10 +175,7 @@ fn vocab_entries_survive_save_load() {
             embedding: vec![0.2; 32],
         },
     ];
-    let state = BrainState {
-        network,
-        vocab_entries: vocab_entries.clone(),
-    };
+    let state = BrainState::new(network, vocab_entries.clone());
 
     let brain = ManasBrain::new(&path);
     brain.save_state(&state).unwrap();
@@ -186,6 +183,32 @@ fn vocab_entries_survive_save_load() {
 
     assert_eq!(loaded.vocab_entries, vocab_entries);
     assert_eq!(loaded.network.input_dim, 32);
+    assert_eq!(loaded.metadata.format_version, 2);
+    assert_eq!(loaded.metadata.input_dim, 32);
+    assert_eq!(loaded.metadata.vocab_size, 2);
+    assert_eq!(loaded.metadata.layer_count, 2);
+    assert_eq!(loaded.metadata.total_neurons, loaded.network.neuron_count());
+    assert!(loaded.metadata.created_at > 0);
+    assert!(loaded.metadata.modified_at >= loaded.metadata.created_at);
+
+    cleanup(&path);
+}
+
+#[test]
+fn metadata_can_be_loaded_directly() {
+    let path = temp_path("metadata");
+    let network = Network::new_empty(32);
+    let brain = ManasBrain::new(&path);
+
+    brain.save(&network).unwrap();
+    let metadata = brain.metadata().unwrap();
+
+    assert_eq!(metadata.format_version, 2);
+    assert_eq!(metadata.input_dim, 32);
+    assert_eq!(metadata.layer_count, 2);
+    assert_eq!(metadata.total_neurons, 0);
+    assert!(metadata.created_at > 0);
+    assert!(metadata.modified_at >= metadata.created_at);
 
     cleanup(&path);
 }

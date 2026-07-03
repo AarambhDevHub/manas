@@ -131,8 +131,9 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 11 | Importance scoring and promotion | Complete |
 | Stage 12 | Freshness system | Complete |
 | Stage 13 | The real demo | Complete |
-| Stage 14 | Inspect, neurons, and debug commands | Next |
-| Stage 15+ | Compression, benchmarks, layer growth | Planned |
+| Stage 14 | Inspect, neurons, and debug commands | Complete |
+| Stage 15 | Compression and forget command | Next |
+| Stage 16+ | Benchmarks, layer growth, future agents | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -157,7 +158,9 @@ and smooth age grace. Stage 12 classifies learned knowledge as Timeless, Slow,
 Fast, or Realtime and warns during `manas ask` when the answer comes from stale
 neuron metadata. Stage 13 adds the full 22-fact proof: the demo teaches facts,
 deletes historical sidecars, and verifies that five questions answer from neural
-weights only with compact decoded answer words.
+weights only with compact decoded answer words. Stage 14 makes the brain
+inspectable with rich `inspect`, `neurons`, and `trace` commands for debugging
+learned weights, metadata, and query flow.
 
 Run the proof:
 
@@ -275,7 +278,7 @@ Manas v2 is built from 5 Rust crates, each with a single responsibility:
 ┌──────────────────────────────────────────┐
 │              manas-cli                   │
 │   teach | ask | inspect | neurons        │
-│   forget | reset                         │
+│   trace | reset                          │
 └───────────────────┬──────────────────────┘
                     │
      ┌──────────────┼──────────────┐

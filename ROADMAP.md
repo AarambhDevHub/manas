@@ -82,8 +82,8 @@ from Stage 2 onward.**
 | Stage 11 | Importance scoring and promotion | Complete |
 | Stage 12 | Freshness system | Complete |
 | Stage 13 | The real demo | Complete |
-| Stage 14 | Inspect, neurons, and debug commands | Next |
-| Stage 15 | Compression and forget command | Planned |
+| Stage 14 | Inspect, neurons, and debug commands | Complete |
+| Stage 15 | Compression and forget command | Next |
 | Stage 16 | Benchmarks and test suite | Planned |
 | Stage 17 | Layer growth | Planned |
 | Stage 18 | Internet agent (future) | Planned |
@@ -1769,6 +1769,9 @@ Search results from DuckDuckGo...
 
 **Goal:** Make the brain state visible and understandable.
 
+**Status:** Complete. The CLI now exposes rich `inspect`, filterable `neurons`,
+and `trace` commands backed by reusable diagnostics APIs.
+
 ### Commands to Build
 
 ```bash
@@ -1821,11 +1824,23 @@ Freshness
 
 ### Done When
 
-- [ ] `manas inspect` shows all sections above
-- [ ] `manas neurons` lists each neuron with ID, importance, protection, source
-- [ ] `manas neurons --protection frozen` filters correctly
-- [ ] `manas trace` shows forward pass activation per layer
-- [ ] `cargo test -p manas-cli inspect` passes
+- [x] `manas inspect` shows all sections above
+- [x] `manas neurons` lists each neuron with ID, importance, protection, source
+- [x] `manas neurons --protection frozen` filters correctly
+- [x] `manas trace` shows forward pass activation per layer
+- [x] `cargo test -p manas-cli stage14` passes
+
+### Stage 14 Implementation Notes
+
+- Added `manas-learn::diagnostics` for reusable brain summaries, neuron rows,
+  filters, and query traces.
+- Added `.manas` header metadata exposure without changing the version 2 binary
+  format.
+- Expanded `manas inspect` with Brain, Network, Learning, Freshness, Sources,
+  and Layers sections.
+- Added `manas neurons` with `--protection` and `--source` filters.
+- Added `manas trace <question> [--limit N]` to show query variants, selected
+  neuron, hidden activations, output values, and the final answer.
 
 ---
 
