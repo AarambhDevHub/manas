@@ -128,8 +128,9 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 8 | Protection system hardened | Complete |
 | Stage 9 | `manas teach` and `manas ask` | Complete |
 | Stage 10 | File and folder ingestion | Complete |
-| Stage 11 | Importance scoring and promotion | Next |
-| Stage 12+ | Freshness, benchmarks, layer growth | Planned |
+| Stage 11 | Importance scoring and promotion | Complete |
+| Stage 12 | Freshness system | Next |
+| Stage 13+ | The real demo, inspect, benchmarks, layer growth | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -148,7 +149,9 @@ automatically during learning. Stage 9 connects the CLI to learning, querying,
 inspection, reset, and restart-safe `.manas` persistence for raw text facts.
 Stage 10 completes local ingestion so `manas teach` accepts raw text, a supported
 file, or a folder of supported files while preserving local file source metadata
-inside the learned neurons.
+inside the learned neurons. Stage 11 replaces activation-count-only promotion
+with weighted importance scoring based on frequency, recency, weight magnitude,
+and smooth age grace.
 
 Run the proof:
 
@@ -201,6 +204,12 @@ Run the protection proof:
 cargo test -p manas-core protection
 cargo test -p manas-learn protection
 cargo test -p manas-store protection
+```
+
+Run the importance proof:
+
+```bash
+cargo test -p manas-learn importance
 ```
 
 Run the CLI proof:

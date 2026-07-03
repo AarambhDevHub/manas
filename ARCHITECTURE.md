@@ -286,8 +286,8 @@ pub enum ProtectionLevel {
 
 Rules:
 - A neuron starts as `Open` when created
-- Stage 8 promotion uses activation counts: `Open → Guarded` at 500 updates,
-  then `Guarded → Frozen` at 2,000 updates
+- Stage 11 promotion uses weighted importance scores:
+  `Open → Guarded` at 0.50, then `Guarded → Frozen` at 0.85
 - `Frozen` neurons are **never** updated by backprop — zero gradient applied
 - `Guarded` neurons receive updates clamped to `[-GUARD_DELTA, +GUARD_DELTA]`
 - Promotion is monotonic: protection can be strengthened but never weakened
@@ -310,8 +310,7 @@ Neurons with high importance are promoted to `Guarded` or `Frozen` automatically
 after each learning step. Low-importance neurons stay `Open` and are candidates
 for reuse or compression.
 
-Stage 8 uses a simple activation-count score for promotion. The full weighted
-importance formula above is formalized later in Stage 11.
+Stage 11 formalizes this weighted score and recomputes it after learning.
 
 ### Layer 3 — Growth Instead of Overwrite
 
@@ -784,7 +783,7 @@ pub fn compute_importance(neuron: &Neuron, now: u64) -> f32 {
     let freq     = (neuron.activation_count as f32 / 10_000.0).clamp(0.0, 1.0);
     let recency  = recency_score(neuron.last_activated, now);
     let magnitude = weight_magnitude(neuron);
-    let age_grace = if neuron.born_at + 7*86400 > now { 1.0 } else { 0.0 };
+    let age_grace = age_grace_score(neuron.born_at, now);
 
     0.40 * freq + 0.30 * recency + 0.20 * magnitude + 0.10 * age_grace
 }
@@ -793,8 +792,8 @@ pub fn promote_if_needed(neuron: &mut Neuron, now: u64) {
     let score = compute_importance(neuron, now);
     neuron.importance_score = score;
     match neuron.protection_level {
-        ProtectionLevel::Open    if score > 0.50 => neuron.protection_level = ProtectionLevel::Guarded,
-        ProtectionLevel::Guarded if score > 0.85 => neuron.protection_level = ProtectionLevel::Frozen,
+        ProtectionLevel::Open    if score >= 0.50 => neuron.guard_all(),
+        ProtectionLevel::Guarded if score >= 0.85 => neuron.freeze_all(),
         _ => {}
     }
 }
@@ -1070,11 +1069,11 @@ importance = 0.40 × freq + 0.30 × recency + 0.20 × magnitude + 0.10 × age_gr
 | `freq` | `activation_count / 10_000` clamped to [0, 1] | How often this neuron fires |
 | `recency` | `exp(-0.1 × days_since_last_activation)` | How recently it was used |
 | `magnitude` | `L2_norm(weights) / 10.0` clamped to [0, 1] | How strong its connections are |
-| `age_grace` | `1.0` if age < 7 days, `0.0` otherwise | Grace period for new neurons |
+| `age_grace` | `exp(-age_days / 7.0)` | Smooth grace period for new neurons |
 
 Promotion thresholds:
-- `Open → Guarded`: importance > 0.50
-- `Guarded → Frozen`: importance > 0.85
+- `Open → Guarded`: importance >= 0.50
+- `Guarded → Frozen`: importance >= 0.85
 
 Scores are recomputed after every `teach` call.
 

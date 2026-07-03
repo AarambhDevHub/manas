@@ -79,8 +79,8 @@ from Stage 2 onward.**
 | Stage 8 | Protection system hardened | Complete |
 | Stage 9 | `manas-cli` v1 — teach and ask | Complete |
 | Stage 10 | File and folder ingestion | Complete |
-| Stage 11 | Importance scoring and promotion | Next |
-| Stage 12 | Freshness system | Planned |
+| Stage 11 | Importance scoring and promotion | Complete |
+| Stage 12 | Freshness system | Next |
 | Stage 13 | The real demo | Planned |
 | Stage 14 | Inspect, neurons, and debug commands | Planned |
 | Stage 15 | Compression and forget command | Planned |
@@ -1262,7 +1262,8 @@ Completion note:
 - Added monotonic protection strengthening so `guard_all()` cannot weaken frozen
   neuron, weight, or bias protection
 - Added Stage 8 activation-count promotion in `Trainer::learn` and
-  `Trainer::update_protection_levels`
+  `Trainer::update_protection_levels`; Stage 11 replaces this baseline with
+  weighted importance scoring
 - Added `ProtectionReport` and filled `LearnReport.neurons_promoted` /
   `LearnReport.neurons_frozen` with actual transition counts
 - Added focused protection tests across `manas-core`, `manas-learn`, and
@@ -1480,7 +1481,8 @@ pub fn compute_importance(neuron: &Neuron, now_secs: u64) -> f32 {
     let days_idle = (now_secs - neuron.last_activated) as f32 / 86_400.0;
     let recency   = (-0.1 * days_idle).exp();
     let magnitude = (l2_norm(&neuron.weights) / 10.0).clamp(0.0, 1.0);
-    let age_grace = if neuron.born_at + 7 * 86400 > now_secs { 1.0 } else { 0.0 };
+    let age_days  = (now_secs - neuron.born_at) as f32 / 86_400.0;
+    let age_grace = (-age_days / 7.0).exp();
 
     0.40 * freq + 0.30 * recency + 0.20 * magnitude + 0.10 * age_grace
 }
@@ -1544,10 +1546,22 @@ fn importance_drives_promotion() {
 
 ### Done When
 
-- [ ] All importance scoring tests pass
-- [ ] Promotion threshold logic verified (Open → Guarded at 0.50, Guarded → Frozen at 0.85)
-- [ ] `age_grace` uses smooth exponential decay not a cliff
-- [ ] `cargo test -p manas-learn importance` passes clean
+- [x] All importance scoring tests pass
+- [x] Promotion threshold logic verified (Open → Guarded at 0.50, Guarded → Frozen at 0.85)
+- [x] `age_grace` uses smooth exponential decay not a cliff
+- [x] `cargo test -p manas-learn importance` passes clean
+
+Completion note:
+- Added `manas-learn/src/importance.rs` with weighted importance scoring and
+  monotonic one-level promotion
+- Replaced activation-count-only trainer promotion with score-based promotion
+  while preserving `ProtectionReport` and `LearnReport` behavior
+- Added learning metadata stamping for `born_at` and `last_activated`
+- Added persistence coverage proving importance metadata survives `.manas`
+  save/load without a format bump
+- Current proof results: `cargo test -p manas-learn importance`,
+  `cargo test -p manas-learn protection`, `cargo test -p manas-store`, and
+  `cargo test -p manas-learn anti_forgetting` pass
 
 ---
 

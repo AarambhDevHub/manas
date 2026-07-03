@@ -22,6 +22,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 8 — Protection system hardened.
 - Stage 9 — `manas-cli` v1: teach and ask.
 - Stage 10 — File and folder ingestion.
+- Stage 11 — Importance scoring and promotion.
 
 ### Added
 
@@ -60,10 +61,15 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Source::LocalFile` metadata is preserved in learned neurons.
 - Added ingestion unit tests plus CLI integration tests for file source metadata
   and recursive folder teaching.
+- Added weighted importance scoring in `manas-learn`, based on activation
+  frequency, recency, weight magnitude, and smooth age grace.
+- Replaced activation-count-only promotion with importance-driven
+  `Open -> Guarded -> Frozen` promotion and preserved importance metadata
+  through `.manas` save/load.
 
 ### Next
 
-- Stage 11 — Importance scoring and promotion.
+- Stage 12 — Freshness system.
 
 ---
 
