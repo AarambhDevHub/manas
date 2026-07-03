@@ -24,6 +24,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 10 — File and folder ingestion.
 - Stage 11 — Importance scoring and promotion.
 - Stage 12 — Freshness system.
+- Stage 13 — The real demo.
 
 ### Added
 
@@ -74,10 +75,17 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stale.
 - Added freshness tests for detection, staleness, trainer query warnings, CLI
   rendering, CLI teach metadata, and `.manas` persistence.
+- Added bound hidden-neuron readout so sequentially learned facts retrieve from
+  their own neural output columns instead of drifting toward the latest fact.
+- Added decode-friendly answer vectors for learned targets and query variants
+  for natural questions like "Where is the Eiffel Tower?"
+- Added `demo.sh` plus the Stage 13 CLI integration test that teaches 22 facts,
+  deletes all historical sidecars, verifies five neural-weight answers, and
+  enforces the sub-500KB brain size gate.
 
 ### Next
 
-- Stage 13 — The real demo.
+- Stage 14 — Inspect, neurons, and debug commands.
 
 ---
 

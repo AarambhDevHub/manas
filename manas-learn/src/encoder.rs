@@ -38,6 +38,22 @@ impl Encoder {
         self.embedder.encode_sequence(&token_ids)
     }
 
+    pub fn encode_answer(&mut self, text: &str) -> Vec<f32> {
+        let words = answer_words(text);
+        if words.is_empty() {
+            return self.encode(text);
+        }
+
+        let mut encoded = vec![0.0; self.dim()];
+        for word in words {
+            let word_vector = self.encode(&word);
+            for (encoded_value, word_value) in encoded.iter_mut().zip(word_vector.iter()) {
+                *encoded_value += word_value;
+            }
+        }
+        encoded
+    }
+
     pub fn encode_deterministic(&self, text: &str) -> Vec<f32> {
         let token_ids = self.tokenizer.encode_deterministic(text);
         self.embedder.encode_existing_sequence(&token_ids)
@@ -142,6 +158,48 @@ impl Encoder {
     pub fn embedder_mut(&mut self) -> &mut Embedder {
         &mut self.embedder
     }
+}
+
+fn answer_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter_map(|raw| {
+            let cleaned = raw
+                .chars()
+                .filter(|ch| ch.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>();
+            if cleaned.is_empty() || is_answer_stopword(&cleaned) {
+                None
+            } else {
+                Some(cleaned)
+            }
+        })
+        .collect()
+}
+
+fn is_answer_stopword(word: &str) -> bool {
+    matches!(
+        word,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "as"
+            | "at"
+            | "by"
+            | "for"
+            | "from"
+            | "in"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "the"
+            | "to"
+            | "was"
+            | "were"
+            | "with"
+    )
 }
 
 #[cfg(test)]

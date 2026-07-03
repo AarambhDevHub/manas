@@ -10,7 +10,7 @@ pub use activation::Activation;
 pub use error::ManasError;
 pub use layer::Layer;
 pub use network::{
-    ConsolidationReport, ForwardCache, GROWTH_THRESHOLD, GUARD_DELTA, MAX_LAYERS,
+    ConsolidationReport, ForwardCache, GROWTH_THRESHOLD, GUARD_DELTA, HiddenReadout, MAX_LAYERS,
     MAX_NEURONS_PER_LAYER, MAX_UPDATE_ATTEMPTS, Network, NeuronGradients, TrainingExample,
 };
 pub use neuron::{Neuron, ProtectionLevel, Source};

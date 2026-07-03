@@ -130,8 +130,9 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 10 | File and folder ingestion | Complete |
 | Stage 11 | Importance scoring and promotion | Complete |
 | Stage 12 | Freshness system | Complete |
-| Stage 13 | The real demo | Next |
-| Stage 14+ | Inspect, benchmarks, layer growth | Planned |
+| Stage 13 | The real demo | Complete |
+| Stage 14 | Inspect, neurons, and debug commands | Next |
+| Stage 15+ | Compression, benchmarks, layer growth | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -154,7 +155,9 @@ inside the learned neurons. Stage 11 replaces activation-count-only promotion
 with weighted importance scoring based on frequency, recency, weight magnitude,
 and smooth age grace. Stage 12 classifies learned knowledge as Timeless, Slow,
 Fast, or Realtime and warns during `manas ask` when the answer comes from stale
-neuron metadata.
+neuron metadata. Stage 13 adds the full 22-fact proof: the demo teaches facts,
+deletes historical sidecars, and verifies that five questions answer from neural
+weights only.
 
 Run the proof:
 
@@ -174,6 +177,12 @@ Run the maintained crate proof:
 
 ```bash
 cargo test -p manas-learn anti_forgetting
+```
+
+Run the v0.1.0 real demo:
+
+```bash
+bash demo.sh
 ```
 
 Run the persistence proof:

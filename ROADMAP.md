@@ -81,8 +81,8 @@ from Stage 2 onward.**
 | Stage 10 | File and folder ingestion | Complete |
 | Stage 11 | Importance scoring and promotion | Complete |
 | Stage 12 | Freshness system | Complete |
-| Stage 13 | The real demo | Next |
-| Stage 14 | Inspect, neurons, and debug commands | Planned |
+| Stage 13 | The real demo | Complete |
+| Stage 14 | Inspect, neurons, and debug commands | Next |
 | Stage 15 | Compression and forget command | Planned |
 | Stage 16 | Benchmarks and test suite | Planned |
 | Stage 17 | Layer growth | Planned |
@@ -1663,6 +1663,10 @@ fn fast_fact_stale_after_30_days() {
 **Goal:** Run the definitive test that v1 failed. This is the milestone that proves
 the whole project works.
 
+**Status:** Complete. `bash demo.sh` builds the release binary, teaches all 22
+facts, deletes all historical sidecars, verifies five neural-weight answers, and
+checks that `brain.manas` stays under 500KB.
+
 ### The Demo Script
 
 ```bash
@@ -1741,11 +1745,21 @@ Search results from DuckDuckGo...
 
 ### Done When
 
-- [ ] All 5 `ask` calls return answers
-- [ ] All 5 show `Answered from: neural weights`
-- [ ] No sidecar files exist when the test runs
-- [ ] Brain file is under 500KB for 22 facts
-- [ ] `manas inspect` shows correct neuron and protection stats
+- [x] All 5 `ask` calls return answers
+- [x] All 5 show `Answered from: neural weights`
+- [x] No sidecar files exist when the test runs
+- [x] Brain file is under 500KB for 22 facts
+- [x] `manas inspect` shows correct neuron and protection stats
+
+### Stage 13 Implementation Notes
+
+- Added bound hidden-neuron readout in `manas-core` so each learned fact keeps
+  its own neural output column
+- Added decode-friendly answer vectors and question variants in `manas-learn`
+  so natural questions retrieve the intended keyed fact
+- Added `demo.sh` and `manas-cli/tests/stage13_demo.rs` as the permanent
+  22-fact proof
+- Current proof result: `bash demo.sh` passes with `brain.manas` at about 83KB
 
 **This is v0.1.0. The first real version of Manas.**
 

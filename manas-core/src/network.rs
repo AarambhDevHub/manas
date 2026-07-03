@@ -36,6 +36,14 @@ pub struct ForwardCache {
     pub output: Vec<f32>,
 }
 
+/// Output reconstructed from one hidden neuron selected by activation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HiddenReadout {
+    pub hidden_index: usize,
+    pub activation: f32,
+    pub output: Vec<f32>,
+}
+
 /// Summary of anchor consolidation.
 #[derive(Clone, Debug)]
 pub struct ConsolidationReport {
@@ -336,6 +344,129 @@ impl Network {
             .ok_or(ManasError::NeuronNotFound(neuron_id))?;
         self.key_hidden_neurons_to_input(input, &[index], false);
         Ok(())
+    }
+
+    pub fn bind_hidden_neuron_to_fact(
+        &mut self,
+        neuron_id: u64,
+        input: &[f32],
+        target: &[f32],
+    ) -> Result<usize, ManasError> {
+        if input.len() != self.input_dim {
+            return Err(ManasError::InvalidNetwork(format!(
+                "input dimension mismatch: expected {}, found {}",
+                self.input_dim,
+                input.len()
+            )));
+        }
+        if target.len() != self.output_dim {
+            return Err(ManasError::InvalidNetwork(format!(
+                "target dimension mismatch: expected {}, found {}",
+                self.output_dim,
+                target.len()
+            )));
+        }
+        if self.layers.len() != 2 {
+            return Err(ManasError::InvalidNetwork(format!(
+                "bound readout expects exactly 2 layers, found {}",
+                self.layers.len()
+            )));
+        }
+        if self.layers[1].neurons.len() != self.output_dim {
+            return Err(ManasError::InvalidNetwork(format!(
+                "output layer has {} neurons, expected {}",
+                self.layers[1].neurons.len(),
+                self.output_dim
+            )));
+        }
+
+        let hidden_index = self.layers[0]
+            .neurons
+            .iter()
+            .position(|neuron| neuron.id == neuron_id)
+            .ok_or(ManasError::NeuronNotFound(neuron_id))?;
+        if !matches!(
+            self.layers[0].neurons[hidden_index].protection_level,
+            ProtectionLevel::Open
+        ) {
+            return Err(ManasError::InvalidNetwork(format!(
+                "cannot rebind protected hidden neuron {neuron_id}"
+            )));
+        }
+
+        self.key_hidden_neurons_to_input(input, &[hidden_index], false);
+        self.layers[0].neurons[hidden_index].activation_count = self.layers[0].neurons
+            [hidden_index]
+            .activation_count
+            .saturating_add(1);
+
+        for (output_neuron, target_value) in self.layers[1].neurons.iter_mut().zip(target.iter()) {
+            if hidden_index >= output_neuron.weights.len() {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "output neuron {} is missing hidden weight {}",
+                    output_neuron.id, hidden_index
+                )));
+            }
+            output_neuron.weights[hidden_index] = *target_value;
+        }
+
+        Ok(hidden_index)
+    }
+
+    pub fn readout_from_best_hidden(&self, input: &[f32]) -> Option<HiddenReadout> {
+        if input.len() != self.input_dim
+            || self.layers.len() != 2
+            || self.layers[0].neurons.is_empty()
+            || self.layers[1].neurons.is_empty()
+        {
+            return None;
+        }
+
+        let hidden = self.layers[0].forward(input);
+        let (hidden_index, activation) = hidden
+            .iter()
+            .enumerate()
+            .max_by(|left, right| {
+                left.1
+                    .partial_cmp(right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(index, activation)| (index, *activation))?;
+
+        if activation <= f32::EPSILON {
+            return None;
+        }
+
+        let output = self.layers[1]
+            .neurons
+            .iter()
+            .map(|output_neuron| {
+                output_neuron
+                    .weights
+                    .get(hidden_index)
+                    .copied()
+                    .unwrap_or(0.0)
+            })
+            .map(|weight| weight * activation)
+            .collect::<Vec<_>>();
+
+        Some(HiddenReadout {
+            hidden_index,
+            activation,
+            output,
+        })
+    }
+
+    pub fn keyed_hidden_memory(&self) -> bool {
+        self.layers
+            .first()
+            .map(|layer| {
+                layer
+                    .neurons
+                    .iter()
+                    .all(|neuron| matches!(neuron.activation, Activation::Keyed))
+            })
+            .unwrap_or(false)
     }
 
     pub fn consolidate_anchor_facts(
@@ -959,6 +1090,71 @@ mod tests {
     }
 
     #[test]
+    fn readout_bound_hidden_neurons_return_different_outputs() {
+        let mut network = Network::new_empty(4);
+        let cat_id = network.grow_neuron(0, 4).unwrap();
+        let paris_id = network.grow_neuron(0, 4).unwrap();
+        let cat_input = [1.0, 0.0, 0.0, 0.0];
+        let paris_input = [0.0, 1.0, 0.0, 0.0];
+        let cat_target = [0.1, 0.2, 0.3, 0.4];
+        let paris_target = [0.4, 0.3, 0.2, 0.1];
+
+        network
+            .bind_hidden_neuron_to_fact(cat_id, &cat_input, &cat_target)
+            .unwrap();
+        network
+            .bind_hidden_neuron_to_fact(paris_id, &paris_input, &paris_target)
+            .unwrap();
+
+        let cat_readout = network.readout_from_best_hidden(&cat_input).unwrap();
+        let paris_readout = network.readout_from_best_hidden(&paris_input).unwrap();
+
+        assert_eq!(cat_readout.hidden_index, 0);
+        assert_eq!(paris_readout.hidden_index, 1);
+        assert_vectors_close(&cat_readout.output, &cat_target);
+        assert_vectors_close(&paris_readout.output, &paris_target);
+    }
+
+    #[test]
+    fn binding_later_fact_does_not_overwrite_earlier_output_column() {
+        let mut network = Network::new_empty(4);
+        let first_id = network.grow_neuron(0, 4).unwrap();
+        let second_id = network.grow_neuron(0, 4).unwrap();
+        let first_input = [1.0, 0.0, 0.0, 0.0];
+        let second_input = [0.0, 1.0, 0.0, 0.0];
+        let first_target = [0.8, 0.1, 0.1, 0.0];
+        let second_target = [0.0, 0.1, 0.1, 0.8];
+
+        network
+            .bind_hidden_neuron_to_fact(first_id, &first_input, &first_target)
+            .unwrap();
+        let before = network
+            .readout_from_best_hidden(&first_input)
+            .unwrap()
+            .output;
+
+        network
+            .bind_hidden_neuron_to_fact(second_id, &second_input, &second_target)
+            .unwrap();
+        let after = network
+            .readout_from_best_hidden(&first_input)
+            .unwrap()
+            .output;
+
+        assert_eq!(before, after);
+        assert_vectors_close(&after, &first_target);
+    }
+
+    #[test]
+    fn readout_returns_none_for_zero_or_empty_input() {
+        let mut network = Network::new_empty(4);
+        network.grow_neuron(0, 4).unwrap();
+
+        assert!(network.readout_from_best_hidden(&[0.0; 4]).is_none());
+        assert!(network.readout_from_best_hidden(&[]).is_none());
+    }
+
+    #[test]
     fn growth_respects_max_neurons_per_layer() {
         let mut network = Network::new_empty(8);
 
@@ -1107,5 +1303,15 @@ mod tests {
             network.layers[0].neurons[1].protection_level,
             ProtectionLevel::Frozen
         );
+    }
+
+    fn assert_vectors_close(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual_value, expected_value) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (actual_value - expected_value).abs() < 1.0e-5,
+                "expected {expected_value:.6}, got {actual_value:.6}"
+            );
+        }
     }
 }
