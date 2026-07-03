@@ -4,7 +4,7 @@ use crate::backprop::cosine;
 use crate::encoder::Encoder;
 
 pub const MIN_QUERY_CONFIDENCE: f32 = 0.25;
-const MAX_ANSWER_WORDS: usize = 6;
+const MAX_ANSWER_WORDS: usize = 10;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedAnswer {
@@ -47,7 +47,7 @@ pub fn decode_answer(output: &[f32], encoder: &Encoder, question: &str) -> Optio
         return None;
     }
 
-    let threshold = (best_score * 0.55).max(MIN_QUERY_CONFIDENCE * 0.75);
+    let threshold = (best_score * 0.25).max(MIN_QUERY_CONFIDENCE * 0.25);
     let mut words = candidates
         .iter()
         .filter(|(_, score)| *score >= threshold)

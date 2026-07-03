@@ -6,12 +6,15 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backprop::{compute_gradients, cosine, mse_loss};
-use crate::decoder::decode_answer;
+use crate::decoder::{DecodedAnswer, decode_answer};
 use crate::encoder::Encoder;
 use crate::freshness::{FreshnessCategory, FreshnessWarning, detect_freshness, staleness_warning};
 use crate::importance;
 
 const DEFAULT_EMBED_TABLE_SIZE: usize = 8192;
+const BOUND_REUSE_ACTIVATION: f32 = 0.55;
+const EXACT_REUSE_ACTIVATION: f32 = 0.98;
+const MIN_READOUT_ACTIVATION: f32 = 1.0e-6;
 
 /// Encoded input-target fact used by Stage 3 training.
 #[derive(Clone, Debug)]
@@ -64,6 +67,18 @@ pub struct Trainer {
     pub max_update_attempts: u32,
 }
 
+enum BoundHiddenSelection {
+    BindExisting(usize),
+    ReadOnly(usize),
+    Grow,
+}
+
+struct BoundQueryCandidate {
+    decoded: DecodedAnswer,
+    hidden_index: usize,
+    score: f32,
+}
+
 impl Trainer {
     pub fn new(learning_rate: f32) -> Self {
         Self::with_seed(42, 32, learning_rate)
@@ -83,7 +98,7 @@ impl Trainer {
             input_text: input.to_string(),
             target_text: target.to_string(),
             input: self.encoder.encode(input),
-            target: self.encoder.encode(target),
+            target: self.encoder.encode_answer(target),
         }
     }
 
@@ -138,6 +153,10 @@ impl Trainer {
         freshness: FreshnessCategory,
     ) -> Result<LearnReport, ManasError> {
         let fact = self.encode_fact(input, target);
+        if network.keyed_hidden_memory() {
+            return self.learn_bound_fact(network, &fact, source, freshness);
+        }
+
         let now_secs = unix_now_secs();
         let activation_counts_before = activation_counts_by_id(network);
         let loss_before = loss_for_fact(network, &fact)?;
@@ -180,6 +199,51 @@ impl Trainer {
         refresh_learning_metadata(network, &activation_counts_before, now_secs);
         let protection_report = self.update_protection_levels_at(network, now_secs);
         assign_metadata_to_best_hidden(network, &fact.input, source, freshness);
+
+        Ok(LearnReport {
+            loss_before,
+            loss_after,
+            neurons_grown,
+            layers_grown: 0,
+            neurons_promoted: protection_report.neurons_promoted,
+            neurons_frozen: protection_report.neurons_frozen,
+            total_neurons: network.neuron_count(),
+            update_applied,
+        })
+    }
+
+    fn learn_bound_fact(
+        &self,
+        network: &mut Network,
+        fact: &EncodedFact,
+        source: Source,
+        freshness: FreshnessCategory,
+    ) -> Result<LearnReport, ManasError> {
+        let now_secs = unix_now_secs();
+        let activation_counts_before = activation_counts_by_id(network);
+        let loss_before = loss_for_bound_fact(network, fact)?;
+        let mut neurons_grown = 0;
+        let mut update_applied = false;
+
+        let hidden_index = match select_bound_hidden(network, &fact.input) {
+            BoundHiddenSelection::BindExisting(index) => {
+                let neuron_id = network.layers[0].neurons[index].id;
+                update_applied = true;
+                network.bind_hidden_neuron_to_fact(neuron_id, &fact.input, &fact.target)?
+            }
+            BoundHiddenSelection::ReadOnly(index) => index,
+            BoundHiddenSelection::Grow => {
+                let neuron_id = network.grow_neuron(0, fact.input.len())?;
+                neurons_grown += 1;
+                update_applied = true;
+                network.bind_hidden_neuron_to_fact(neuron_id, &fact.input, &fact.target)?
+            }
+        };
+
+        let loss_after = loss_for_bound_fact(network, fact)?;
+        refresh_learning_metadata(network, &activation_counts_before, now_secs);
+        let protection_report = self.update_protection_levels_at(network, now_secs);
+        assign_metadata_to_hidden_index(network, hidden_index, source, freshness);
 
         Ok(LearnReport {
             loss_before,
@@ -276,8 +340,16 @@ impl Trainer {
     }
 
     pub fn query(&self, network: &Network, question: &str) -> Result<QueryResult, ManasError> {
+        if network.neuron_count() == 0 {
+            return Ok(not_enough());
+        }
+
+        if network.keyed_hidden_memory() {
+            return Ok(self.query_bound_memory(network, question));
+        }
+
         let input = self.encoder.encode_deterministic(question);
-        if input.iter().all(|value| value.abs() <= f32::EPSILON) || network.neuron_count() == 0 {
+        if input.iter().all(|value| value.abs() <= f32::EPSILON) {
             return Ok(not_enough());
         }
 
@@ -296,6 +368,58 @@ impl Trainer {
             }
             None => not_enough(),
         })
+    }
+
+    fn query_bound_memory(&self, network: &Network, question: &str) -> QueryResult {
+        let mut best: Option<BoundQueryCandidate> = None;
+
+        for variant in query_variants(question) {
+            let input = self.encoder.encode_deterministic(&variant);
+            if input.iter().all(|value| value.abs() <= f32::EPSILON) {
+                continue;
+            }
+
+            let Some(readout) = network.readout_from_best_hidden(&input) else {
+                continue;
+            };
+            if readout.activation < MIN_READOUT_ACTIVATION {
+                continue;
+            }
+
+            let Some(decoded) = decode_answer(&readout.output, &self.encoder, question) else {
+                continue;
+            };
+            let score = decoded.confidence * readout.activation.clamp(0.0, 1.0);
+
+            if best
+                .as_ref()
+                .map(|current| score > current.score)
+                .unwrap_or(true)
+            {
+                best = Some(BoundQueryCandidate {
+                    decoded,
+                    hidden_index: readout.hidden_index,
+                    score,
+                });
+            }
+        }
+
+        let Some(best) = best else {
+            return not_enough();
+        };
+
+        let freshness_warning = network
+            .layers
+            .first()
+            .and_then(|layer| layer.neurons.get(best.hidden_index))
+            .and_then(|neuron| staleness_warning(neuron, unix_now_secs()));
+
+        QueryResult {
+            answer: best.decoded.answer,
+            confidence: best.score.clamp(0.0, 1.0),
+            answered_from: AnswerSource::NeuralWeights,
+            freshness_warning,
+        }
     }
 
     pub fn similarity_for_fact(&self, network: &Network, fact: &EncodedFact) -> f32 {
@@ -322,12 +446,147 @@ fn loss_for_fact(network: &Network, fact: &EncodedFact) -> Result<f32, ManasErro
     mse_loss(&network.forward(&fact.input), &fact.target)
 }
 
+fn loss_for_bound_fact(network: &Network, fact: &EncodedFact) -> Result<f32, ManasError> {
+    let output = network
+        .readout_from_best_hidden(&fact.input)
+        .map(|readout| readout.output)
+        .unwrap_or_else(|| vec![0.0; network.output_dim]);
+    mse_loss(&output, &fact.target)
+}
+
+fn select_bound_hidden(network: &Network, input: &[f32]) -> BoundHiddenSelection {
+    let Some(readout) = network.readout_from_best_hidden(input) else {
+        return BoundHiddenSelection::Grow;
+    };
+    let Some(neuron) = network
+        .layers
+        .first()
+        .and_then(|layer| layer.neurons.get(readout.hidden_index))
+    else {
+        return BoundHiddenSelection::Grow;
+    };
+
+    if readout.activation >= EXACT_REUSE_ACTIVATION {
+        return if matches!(neuron.protection_level, ProtectionLevel::Open) {
+            BoundHiddenSelection::BindExisting(readout.hidden_index)
+        } else {
+            BoundHiddenSelection::ReadOnly(readout.hidden_index)
+        };
+    }
+
+    if readout.activation >= BOUND_REUSE_ACTIVATION
+        && matches!(neuron.protection_level, ProtectionLevel::Open)
+    {
+        BoundHiddenSelection::BindExisting(readout.hidden_index)
+    } else {
+        BoundHiddenSelection::Grow
+    }
+}
+
 fn detected_freshness(input: &str, target: &str) -> FreshnessCategory {
     let mut text = String::with_capacity(input.len() + target.len() + 1);
     text.push_str(input);
     text.push(' ');
     text.push_str(target);
     detect_freshness(&text)
+}
+
+fn query_variants(question: &str) -> Vec<String> {
+    let words = normalized_query_words(question);
+    if words.is_empty() {
+        return vec![question.trim().to_string()];
+    }
+
+    let mut variants = Vec::new();
+    let entity_words = words
+        .iter()
+        .filter(|word| !is_query_stopword(word) && !is_relation_word(word))
+        .cloned()
+        .collect::<Vec<_>>();
+    push_variant(&mut variants, entity_words.join(" "));
+
+    let content_words = words
+        .iter()
+        .filter(|word| !is_query_stopword(word))
+        .cloned()
+        .collect::<Vec<_>>();
+    push_variant(&mut variants, content_words.join(" "));
+
+    for word in content_words {
+        push_variant(&mut variants, word);
+    }
+
+    push_variant(&mut variants, question.trim().to_string());
+    variants
+}
+
+fn push_variant(variants: &mut Vec<String>, variant: String) {
+    let trimmed = variant.trim();
+    if !trimmed.is_empty() && !variants.iter().any(|existing| existing == trimmed) {
+        variants.push(trimmed.to_string());
+    }
+}
+
+fn normalized_query_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .filter_map(|raw| {
+            let cleaned = raw
+                .chars()
+                .filter(|ch| ch.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect::<String>();
+            (!cleaned.is_empty()).then_some(cleaned)
+        })
+        .collect()
+}
+
+fn is_query_stopword(word: &str) -> bool {
+    matches!(
+        word,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "at"
+            | "by"
+            | "did"
+            | "do"
+            | "does"
+            | "in"
+            | "is"
+            | "of"
+            | "on"
+            | "the"
+            | "to"
+            | "was"
+            | "were"
+            | "what"
+            | "when"
+            | "where"
+            | "which"
+            | "who"
+            | "why"
+    )
+}
+
+fn is_relation_word(word: &str) -> bool {
+    matches!(
+        word,
+        "boils"
+            | "built"
+            | "contains"
+            | "converts"
+            | "created"
+            | "describes"
+            | "develop"
+            | "developed"
+            | "fell"
+            | "launched"
+            | "located"
+            | "painted"
+            | "pulls"
+            | "released"
+            | "wrote"
+    )
 }
 
 fn unix_now_secs() -> u64 {
@@ -403,6 +662,22 @@ fn assign_metadata_to_best_hidden(
 
     network.layers[0].neurons[index].source = source;
     network.layers[0].neurons[index].freshness_category = freshness as u8;
+}
+
+fn assign_metadata_to_hidden_index(
+    network: &mut Network,
+    hidden_index: usize,
+    source: Source,
+    freshness: FreshnessCategory,
+) {
+    if let Some(neuron) = network
+        .layers
+        .get_mut(0)
+        .and_then(|layer| layer.neurons.get_mut(hidden_index))
+    {
+        neuron.source = source;
+        neuron.freshness_category = freshness as u8;
+    }
 }
 
 fn best_open_hidden_index(network: &Network, input: &[f32]) -> Option<usize> {
@@ -712,6 +987,66 @@ mod tests {
     }
 
     #[test]
+    fn query_bound_memory_returns_distinct_sequential_answers() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn(
+                &mut network,
+                "cat",
+                "small domesticated animal with fur and whiskers",
+            )
+            .unwrap();
+        trainer
+            .learn(
+                &mut network,
+                "Eiffel Tower",
+                "located in Paris France and built in 1889",
+            )
+            .unwrap();
+        trainer
+            .learn(
+                &mut network,
+                "Einstein",
+                "theory of relativity in the early 20th century",
+            )
+            .unwrap();
+
+        let cat = trainer.query(&network, "What is a cat?").unwrap();
+        let eiffel = trainer
+            .query(&network, "Where is the Eiffel Tower?")
+            .unwrap();
+        let einstein = trainer
+            .query(&network, "What did Einstein develop?")
+            .unwrap();
+
+        assert_eq!(cat.answered_from, AnswerSource::NeuralWeights);
+        assert_contains_any(&cat.answer, &["animal", "fur", "whiskers"]);
+        assert_contains_any(&eiffel.answer, &["paris", "france", "1889"]);
+        assert_contains_all(&einstein.answer, &["theory", "relativity"]);
+        assert_ne!(cat.answer, eiffel.answer);
+        assert_ne!(eiffel.answer, einstein.answer);
+    }
+
+    #[test]
+    fn query_bound_memory_uses_question_variants() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn(&mut network, "Eiffel Tower", "located in Paris France")
+            .unwrap();
+
+        let result = trainer
+            .query(&network, "Where is the Eiffel Tower?")
+            .unwrap();
+
+        assert_eq!(result.answered_from, AnswerSource::NeuralWeights);
+        assert_contains_all(&result.answer, &["paris", "france"]);
+    }
+
+    #[test]
     fn learn_with_source_preserves_local_file_metadata() {
         let mut network = Network::new_empty(32);
         let mut trainer = Trainer::new(0.01);
@@ -814,6 +1149,24 @@ mod tests {
         neuron.born_at = now_secs;
         for weight in &mut neuron.weights {
             *weight = 10.0;
+        }
+    }
+
+    fn assert_contains_any(answer: &str, words: &[&str]) {
+        let normalized = answer.to_lowercase();
+        assert!(
+            words.iter().any(|word| normalized.contains(word)),
+            "answer '{answer}' did not contain any of {words:?}"
+        );
+    }
+
+    fn assert_contains_all(answer: &str, words: &[&str]) {
+        let normalized = answer.to_lowercase();
+        for word in words {
+            assert!(
+                normalized.contains(word),
+                "answer '{answer}' did not contain '{word}'"
+            );
         }
     }
 }

@@ -560,6 +560,9 @@ impl Network {
     pub fn forward_with_cache(&self, input: &[f32]) -> ForwardCache { ... }
     pub fn grow_neuron(&mut self, layer_id: u32, input_size: usize) -> Result<u64, ManasError> { ... }
     pub fn grow_layer(&mut self, input_size: usize, neuron_count: usize) -> Result<u32, ManasError> { ... }
+    pub fn bind_hidden_neuron_to_fact(&mut self, neuron_id: u64, input: &[f32], target: &[f32])
+        -> Result<usize, ManasError> { ... }
+    pub fn readout_from_best_hidden(&self, input: &[f32]) -> Option<HiddenReadout> { ... }
     pub fn neuron_count(&self) -> u64 { ... }
     pub fn layer_count(&self) -> usize { ... }
     pub fn open_neuron_count(&self) -> u64 { ... }
@@ -778,6 +781,12 @@ pub struct QueryResult {
     pub confidence: f32,          // 0.0 → 1.0
     pub answered_from: AnswerSource,
     pub freshness_warning: Option<FreshnessWarning>,
+}
+
+pub struct HiddenReadout {
+    pub hidden_index: usize,
+    pub activation: f32,
+    pub output: Vec<f32>,
 }
 
 pub struct FreshnessWarning {
@@ -1008,16 +1017,12 @@ manas teach "A cat is a small domesticated animal with fur and whiskers."
   3. manas-ingest: chunk (single chunk, text is short)
   4. manas-learn: tokenize chunk → token IDs
   5. manas-learn: embed with positional encoding → input_vec (Vec<f32>)
-  6. manas-learn: build target — encode("cat animal fur whiskers small domesticated") → target_vec
-  7. manas-core: forward(input_vec) → output_vec
-  8. manas-learn: compute MSE loss(output_vec, target_vec)
-  9. manas-learn: loss > GROWTH_THRESHOLD?
-       → yes: try updating Open neurons (up to MAX_ATTEMPTS)
-       → still high: grow new neuron in appropriate layer
-  10. manas-core: apply_gradients() — respects ProtectionLevel on every neuron
-  11. manas-learn: update importance scores, promote protection levels
-  12. manas-store: append new neurons to .manas; update existing neuron records
-  13. manas-cli: print LearnReport
+  6. manas-learn: build decode-friendly answer vector from meaningful target words
+  7. manas-core: grow or reuse an Open keyed hidden neuron
+  8. manas-core: bind the hidden neuron to input_vec and write target_vec into its output column
+  9. manas-learn: update importance, source, freshness, and protection metadata
+  10. manas-store: persist network weights, vocab, and neuron metadata in .manas
+  11. manas-cli: print LearnReport
 ```
 
 ### Asking a Question
@@ -1026,15 +1031,16 @@ manas teach "A cat is a small domesticated animal with fur and whiskers."
 manas ask "What is a cat?"
 
   1. manas-cli: parse command
-  2. manas-learn: encode("What is a cat") → question_vec (Vec<f32>)
-  3. manas-core: forward(question_vec) → output_vec
-  4. manas-learn: confidence = cosine_similarity(output_vec, nearest known vector)
-  5. confidence > MIN_CONFIDENCE?
+  2. manas-learn: build query variants such as "cat" from "What is a cat?"
+  3. manas-learn: encode each query variant → question_vec (Vec<f32>)
+  4. manas-core: select best activated hidden neuron and read only its output column
+  5. manas-learn: confidence = decoded answer score × hidden activation
+  6. confidence > MIN_CONFIDENCE?
        → yes: decode(output_vec) → "small domesticated animal with fur and whiskers"
               answered_from = AnswerSource::NeuralWeights
        → no:  "Not enough knowledge yet."
               answered_from = AnswerSource::NotEnough
-  6. manas-cli: print QueryResult
+  7. manas-cli: print QueryResult
 ```
 
 No text file. No sidecar. No internet. The network answers from its own weights.

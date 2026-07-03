@@ -487,13 +487,31 @@ fn extract_association(text: &str) -> Result<(String, String), String> {
     }
 
     let lower = cleaned.to_lowercase();
-    for marker in [" refers to ", " means ", " were ", " was ", " are ", " is "] {
-        if let Some(index) = lower.find(marker) {
-            let input = strip_leading_article(&cleaned[..index]);
-            let target = strip_leading_article(&cleaned[index + marker.len()..]);
-            if !input.is_empty() && !target.is_empty() {
-                return Ok((input, target));
-            }
+    let markers = [
+        " refers to ",
+        " means ",
+        " contains ",
+        " describes ",
+        " developed ",
+        " pulls ",
+        " boils ",
+        " wrote ",
+        " fell ",
+        " were ",
+        " was ",
+        " are ",
+        " is ",
+    ];
+
+    if let Some((index, marker)) = markers
+        .iter()
+        .filter_map(|marker| lower.find(marker).map(|index| (index, *marker)))
+        .min_by_key(|(index, _)| *index)
+    {
+        let input = normalize_subject(&cleaned[..index], marker);
+        let target = strip_leading_article(&cleaned[index + marker.len()..]);
+        if !input.is_empty() && !target.is_empty() {
+            return Ok((input, target));
         }
     }
 
@@ -502,6 +520,17 @@ fn extract_association(text: &str) -> Result<(String, String), String> {
         .find(|word| !is_stopword(word))
         .ok_or_else(|| "could not find a teachable subject".to_string())?;
     Ok((input, cleaned))
+}
+
+fn normalize_subject(text: &str, marker: &str) -> String {
+    let subject = strip_leading_article(text);
+    if marker == " developed " {
+        let words = subject.split_whitespace().collect::<Vec<_>>();
+        if words.len() == 2 {
+            return words[1].to_string();
+        }
+    }
+    subject
 }
 
 fn trim_sentence(text: &str) -> String {
@@ -612,6 +641,26 @@ mod tests {
 
         assert_eq!(input, "Eiffel Tower");
         assert_eq!(target, "located in Paris France");
+    }
+
+    #[test]
+    fn extracts_earliest_relation_in_sentence() {
+        let (input, target) = extract_association(
+            "The Eiffel Tower is located in Paris France and was built in 1889.",
+        )
+        .unwrap();
+
+        assert_eq!(input, "Eiffel Tower");
+        assert_eq!(target, "located in Paris France and was built in 1889");
+    }
+
+    #[test]
+    fn extracts_developed_relation_with_last_name_subject() {
+        let (input, target) =
+            extract_association("Albert Einstein developed the theory of relativity.").unwrap();
+
+        assert_eq!(input, "Einstein");
+        assert_eq!(target, "theory of relativity");
     }
 
     #[test]
