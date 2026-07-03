@@ -4,6 +4,7 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use manas_core::Source;
+use manas_learn::FreshnessCategory;
 use manas_store::ManasBrain;
 
 #[test]
@@ -118,6 +119,38 @@ fn cli_teach_folder_walks_supported_files_recursively() {
     assert_success(&ask);
     let ask_stdout = stdout(&ask);
     assert!(ask_stdout.contains("neural weights"), "{ask_stdout}");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_teach_stamps_realtime_freshness_metadata() {
+    let dir = temp_dir("teach-freshness");
+
+    let teach = run(
+        &dir,
+        &["teach", "Breaking news: the stock market fell today."],
+    );
+    assert_success(&teach);
+
+    let state = ManasBrain::new(dir.join("brain.manas"))
+        .load_state()
+        .unwrap();
+    let has_realtime_freshness = state
+        .network
+        .layers
+        .first()
+        .map(|layer| {
+            layer
+                .neurons
+                .iter()
+                .any(|neuron| neuron.freshness_category == FreshnessCategory::Realtime as u8)
+        })
+        .unwrap_or(false);
+    assert!(
+        has_realtime_freshness,
+        "expected realtime freshness metadata"
+    );
 
     fs::remove_dir_all(dir).unwrap();
 }

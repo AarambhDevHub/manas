@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::backprop::{compute_gradients, cosine, mse_loss};
 use crate::decoder::decode_answer;
 use crate::encoder::Encoder;
+use crate::freshness::{FreshnessCategory, FreshnessWarning, detect_freshness, staleness_warning};
 use crate::importance;
 
 const DEFAULT_EMBED_TABLE_SIZE: usize = 8192;
@@ -39,6 +40,7 @@ pub struct QueryResult {
     pub answer: String,
     pub confidence: f32,
     pub answered_from: AnswerSource,
+    pub freshness_warning: Option<FreshnessWarning>,
 }
 
 /// Growth-aware result from a single learn call.
@@ -118,6 +120,23 @@ impl Trainer {
         target: &str,
         source: Source,
     ) -> Result<LearnReport, ManasError> {
+        self.learn_with_source_and_freshness(
+            network,
+            input,
+            target,
+            source,
+            detected_freshness(input, target),
+        )
+    }
+
+    pub fn learn_with_source_and_freshness(
+        &mut self,
+        network: &mut Network,
+        input: &str,
+        target: &str,
+        source: Source,
+        freshness: FreshnessCategory,
+    ) -> Result<LearnReport, ManasError> {
         let fact = self.encode_fact(input, target);
         let now_secs = unix_now_secs();
         let activation_counts_before = activation_counts_by_id(network);
@@ -160,7 +179,7 @@ impl Trainer {
 
         refresh_learning_metadata(network, &activation_counts_before, now_secs);
         let protection_report = self.update_protection_levels_at(network, now_secs);
-        assign_source_to_best_hidden(network, &fact.input, source);
+        assign_metadata_to_best_hidden(network, &fact.input, source, freshness);
 
         Ok(LearnReport {
             loss_before,
@@ -264,11 +283,17 @@ impl Trainer {
 
         let output = network.forward(&input);
         Ok(match decode_answer(&output, &self.encoder, question) {
-            Some(decoded) => QueryResult {
-                answer: decoded.answer,
-                confidence: decoded.confidence,
-                answered_from: AnswerSource::NeuralWeights,
-            },
+            Some(decoded) => {
+                let freshness_warning = best_hidden_neuron(network, &input)
+                    .and_then(|neuron| staleness_warning(neuron, unix_now_secs()));
+
+                QueryResult {
+                    answer: decoded.answer,
+                    confidence: decoded.confidence,
+                    answered_from: AnswerSource::NeuralWeights,
+                    freshness_warning,
+                }
+            }
             None => not_enough(),
         })
     }
@@ -295,6 +320,14 @@ fn training_examples(facts: &[EncodedFact]) -> Vec<TrainingExample<'_>> {
 
 fn loss_for_fact(network: &Network, fact: &EncodedFact) -> Result<f32, ManasError> {
     mse_loss(&network.forward(&fact.input), &fact.target)
+}
+
+fn detected_freshness(input: &str, target: &str) -> FreshnessCategory {
+    let mut text = String::with_capacity(input.len() + target.len() + 1);
+    text.push_str(input);
+    text.push(' ');
+    text.push_str(target);
+    detect_freshness(&text)
 }
 
 fn unix_now_secs() -> u64 {
@@ -342,6 +375,7 @@ fn not_enough() -> QueryResult {
         answer: "Not enough knowledge yet.".to_string(),
         confidence: 0.0,
         answered_from: AnswerSource::NotEnough,
+        freshness_warning: None,
     }
 }
 
@@ -357,8 +391,22 @@ fn grow_for_fact(network: &mut Network, fact: &EncodedFact) -> Result<(), ManasE
     )
 }
 
-fn assign_source_to_best_hidden(network: &mut Network, input: &[f32], source: Source) {
-    let Some((index, _)) = network.layers.first().and_then(|layer| {
+fn assign_metadata_to_best_hidden(
+    network: &mut Network,
+    input: &[f32],
+    source: Source,
+    freshness: FreshnessCategory,
+) {
+    let Some(index) = best_open_hidden_index(network, input) else {
+        return;
+    };
+
+    network.layers[0].neurons[index].source = source;
+    network.layers[0].neurons[index].freshness_category = freshness as u8;
+}
+
+fn best_open_hidden_index(network: &Network, input: &[f32]) -> Option<usize> {
+    network.layers.first().and_then(|layer| {
         layer
             .neurons
             .iter()
@@ -370,11 +418,19 @@ fn assign_source_to_best_hidden(network: &mut Network, input: &[f32], source: So
                     .partial_cmp(&right.1)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-    }) else {
-        return;
-    };
+            .map(|(index, _)| index)
+    })
+}
 
-    network.layers[0].neurons[index].source = source;
+fn best_hidden_neuron<'a>(network: &'a Network, input: &[f32]) -> Option<&'a manas_core::Neuron> {
+    network.layers.first().and_then(|layer| {
+        layer.neurons.iter().max_by(|left, right| {
+            left.activate(input)
+                .abs()
+                .partial_cmp(&right.activate(input).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -631,6 +687,7 @@ mod tests {
 
         assert_eq!(result.answered_from, AnswerSource::NeuralWeights);
         assert!(result.confidence > 0.0);
+        assert_eq!(result.freshness_warning, None);
         assert!(
             result.answer.contains("animal") || result.answer.contains("fur"),
             "answer was '{}'",
@@ -651,6 +708,7 @@ mod tests {
 
         assert_eq!(result.answered_from, AnswerSource::NotEnough);
         assert_eq!(result.confidence, 0.0);
+        assert_eq!(result.freshness_warning, None);
     }
 
     #[test]
@@ -670,6 +728,83 @@ mod tests {
                 .neurons
                 .iter()
                 .any(|neuron| neuron.source == source)
+        );
+    }
+
+    #[test]
+    fn learn_with_source_detects_freshness_metadata() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn_with_source(
+                &mut network,
+                "market",
+                "Breaking news: the stock market fell today",
+                Source::RawText,
+            )
+            .unwrap();
+
+        assert!(
+            network.layers[0]
+                .neurons
+                .iter()
+                .any(|neuron| neuron.freshness_category == FreshnessCategory::Realtime as u8)
+        );
+    }
+
+    #[test]
+    fn learn_with_source_and_freshness_uses_explicit_category() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn_with_source_and_freshness(
+                &mut network,
+                "water",
+                "Water is always composed of hydrogen and oxygen",
+                Source::RawText,
+                FreshnessCategory::Timeless,
+            )
+            .unwrap();
+
+        assert!(
+            network.layers[0]
+                .neurons
+                .iter()
+                .any(|neuron| neuron.freshness_category == FreshnessCategory::Timeless as u8)
+        );
+    }
+
+    #[test]
+    fn query_returns_warning_for_stale_neural_answer() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn_with_source_and_freshness(
+                &mut network,
+                "cat",
+                "small animal with fur",
+                Source::RawText,
+                FreshnessCategory::Fast,
+            )
+            .unwrap();
+
+        let query_input = trainer.encoder.encode_deterministic("What is a cat?");
+        let hidden_index = best_open_hidden_index(&network, &query_input).unwrap();
+        network.layers[0].neurons[hidden_index].born_at = unix_now_secs() - 31 * 86_400;
+        network.layers[0].neurons[hidden_index].freshness_category = FreshnessCategory::Fast as u8;
+
+        let result = trainer.query(&network, "What is a cat?").unwrap();
+
+        assert_eq!(result.answered_from, AnswerSource::NeuralWeights);
+        assert_eq!(
+            result.freshness_warning,
+            Some(FreshnessWarning {
+                category: FreshnessCategory::Fast,
+                age_days: 31,
+            })
         );
     }
 

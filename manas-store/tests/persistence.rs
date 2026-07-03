@@ -7,7 +7,7 @@ use manas_learn::fixtures::{
     ANCHOR_FACTS, ANCHOR_NEURONS_PER_FACT, ANCHOR_TRAIN_EPOCHS, EMBED_DIM, HIDDEN_DIM,
     LEARNING_RATE, OUTPUT_DIM,
 };
-use manas_learn::{EncodedFact, Trainer};
+use manas_learn::{EncodedFact, FreshnessCategory, Trainer};
 use manas_store::{BrainState, ManasBrain, VocabEntry};
 
 const CRC32_POLYNOMIAL: u32 = 0xEDB8_8320;
@@ -132,6 +132,29 @@ fn importance_metadata_survives_save_load() {
     assert_eq!(loaded_neuron.born_at, 1_800_000_000);
     assert_eq!(loaded_neuron.last_activated, 1_800_086_400);
     assert_eq!(loaded_neuron.activation_count, 12_345);
+
+    cleanup(&path);
+}
+
+#[test]
+fn freshness_category_survives_save_load() {
+    let path = temp_path("freshness");
+    let mut network = Network::new(32, 64, 32);
+    network.layers[0].neurons[0].freshness_category = FreshnessCategory::Realtime as u8;
+    network.layers[0].neurons[1].freshness_category = FreshnessCategory::Timeless as u8;
+
+    let brain = ManasBrain::new(&path);
+    brain.save(&network).unwrap();
+    let loaded = brain.load().unwrap();
+
+    assert_eq!(
+        loaded.layers[0].neurons[0].freshness_category,
+        FreshnessCategory::Realtime as u8
+    );
+    assert_eq!(
+        loaded.layers[0].neurons[1].freshness_category,
+        FreshnessCategory::Timeless as u8
+    );
 
     cleanup(&path);
 }
