@@ -305,8 +305,8 @@ pub fn trace_query(
         if encoded {
             if network.keyed_hidden_memory() {
                 if let Some(readout) = network.readout_from_best_hidden(&input) {
-                    variant.hidden_index = Some(readout.hidden_index);
-                    variant.hidden_neuron_id = hidden_neuron_id(network, readout.hidden_index);
+                    variant.hidden_index = Some(readout.global_hidden_index);
+                    variant.hidden_neuron_id = Some(readout.neuron_id);
                     variant.hidden_activation = readout.activation;
 
                     if let Some(decoded) =
@@ -463,10 +463,11 @@ fn update_best(best: &mut Option<TraceCandidate>, candidate: TraceCandidate) {
 }
 
 fn hidden_neuron_id(network: &Network, hidden_index: usize) -> Option<u64> {
+    let (layer_index, neuron_index) = network.hidden_location_by_global_index(hidden_index)?;
     network
         .layers
-        .first()
-        .and_then(|layer| layer.neurons.get(hidden_index))
+        .get(layer_index)
+        .and_then(|layer| layer.neurons.get(neuron_index))
         .map(|neuron| neuron.id)
 }
 
@@ -489,27 +490,34 @@ fn top_hidden_activations(
     input: &[f32],
     limit: usize,
 ) -> Vec<NeuronActivationDiagnostic> {
-    let Some(layer) = network.layers.first() else {
-        return Vec::new();
-    };
     let cache = network.forward_with_cache(input);
-    let mut rows = layer
-        .neurons
+    let mut global_hidden_index = 0;
+    let mut rows = Vec::new();
+
+    for (layer_index, layer) in network
+        .layers
         .iter()
-        .zip(cache.hidden.iter())
+        .take(network.layers.len().saturating_sub(1))
         .enumerate()
-        .map(
-            |(neuron_index, (neuron, activation))| NeuronActivationDiagnostic {
-                layer_index: 0,
+    {
+        for (neuron_index, neuron) in layer.neurons.iter().enumerate() {
+            let activation = cache
+                .hidden
+                .get(global_hidden_index)
+                .copied()
+                .unwrap_or(0.0);
+            rows.push(NeuronActivationDiagnostic {
+                layer_index,
                 layer_id: layer.id,
                 neuron_index,
                 neuron_id: neuron.id,
-                activation: *activation,
+                activation,
                 protection: neuron.protection_level,
                 source_label: source_label(&neuron.source),
-            },
-        )
-        .collect::<Vec<_>>();
+            });
+            global_hidden_index += 1;
+        }
+    }
 
     rows.sort_by(|left, right| {
         right
@@ -527,7 +535,7 @@ fn top_output_values(
     output: &[f32],
     limit: usize,
 ) -> Vec<OutputValueDiagnostic> {
-    let output_layer = network.layers.get(1);
+    let output_layer = network.layers.last();
     let mut rows = output
         .iter()
         .enumerate()

@@ -311,6 +311,54 @@ fn grown_empty_network_survives_save_and_load() {
 }
 
 #[test]
+fn deep_network_survives_save_and_load() {
+    let path = temp_path("deep");
+    let mut network = Network::new_empty(4);
+    let cat_id = network.grow_neuron(0, 4).unwrap();
+    let paris_id = network.grow_neuron(0, 4).unwrap();
+    let cat_input = [1.0, 0.0, 0.0, 0.0];
+    let paris_input = [0.0, 1.0, 0.0, 0.0];
+    let rust_input = [0.0, 0.0, 1.0, 0.0];
+    let cat_target = [0.9, 0.1, 0.0, 0.0];
+    let paris_target = [0.0, 0.9, 0.1, 0.0];
+    let rust_target = [0.0, 0.0, 0.9, 0.1];
+
+    network
+        .bind_hidden_neuron_to_fact(cat_id, &cat_input, &cat_target)
+        .unwrap();
+    network
+        .bind_hidden_neuron_to_fact(paris_id, &paris_input, &paris_target)
+        .unwrap();
+    let layer_id = network.grow_layer(2, 1).unwrap();
+    let rust_id = network
+        .layers
+        .iter()
+        .find(|layer| layer.id == layer_id)
+        .and_then(|layer| layer.neurons.last())
+        .map(|neuron| neuron.id)
+        .unwrap();
+    network
+        .bind_hidden_neuron_to_fact(rust_id, &rust_input, &rust_target)
+        .unwrap();
+
+    let expected = network.readout_from_best_hidden(&rust_input).unwrap();
+    let brain = ManasBrain::new(&path);
+    brain.save(&network).unwrap();
+    let loaded = brain.load().unwrap();
+    let metadata = brain.metadata().unwrap();
+    let loaded_readout = loaded.readout_from_best_hidden(&rust_input).unwrap();
+
+    assert_eq!(loaded.layer_count(), 3);
+    assert_eq!(loaded.hidden_dim, 3);
+    assert_eq!(metadata.layer_count, 3);
+    assert_eq!(loaded_readout.layer_index, expected.layer_index);
+    assert_eq!(loaded_readout.neuron_id, expected.neuron_id);
+    assert_eq!(loaded_readout.output, expected.output);
+
+    cleanup(&path);
+}
+
+#[test]
 fn anchor_consolidated_network_survives_save_load() {
     let path = temp_path("anchors");
     let mut trainer = Trainer::with_seed(42, EMBED_DIM, LEARNING_RATE);

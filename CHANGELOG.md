@@ -28,6 +28,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 14 — Inspect, neurons, and debug commands.
 - Stage 15 — Compression and forget command.
 - Stage 16 — Benchmarks and test suite.
+- Stage 17 — Layer growth.
 
 ### Added
 
@@ -114,10 +115,18 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   persistence, growth, protection, compression, freshness, and ingestion.
 - Added CI benchmark smoke coverage through
   `cargo bench -p manas-benches -- --quick`.
+- Added real hidden-layer growth in `manas-core`; `grow_layer` now inserts a new
+  hidden layer before the output layer instead of widening layer 0.
+- Generalized forward caches, backpropagation, trainer growth, bound readout,
+  diagnostics, and `.manas` validation for multi-hidden-layer networks.
+- Preserved older bound-memory answers by keeping output weights connected to a
+  flattened hidden-activation readout.
+- Added Stage 17 tests for layer growth, max-layer bounds, deep gradients,
+  trainer-triggered layer insertion, deep persistence, and CLI inspect/query.
 
 ### Next
 
-- Stage 17 — Layer growth.
+- Stage 18 — Internet agent.
 
 ---
 

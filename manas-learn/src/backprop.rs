@@ -21,15 +21,15 @@ pub fn mse_loss(actual: &[f32], expected: &[f32]) -> Result<f32, ManasError> {
         / actual.len() as f32)
 }
 
-/// Compute gradients for the proven two-layer associative network.
+/// Compute gradients for the associative network.
 pub fn compute_gradients(
     network: &Network,
     input: &[f32],
     target: &[f32],
 ) -> Result<(f32, Vec<(u64, NeuronGradients)>), ManasError> {
-    if network.layers.len() != 2 {
+    if network.layers.len() < 2 {
         return Err(ManasError::InvalidNetwork(
-            "Stage 3 trainer expects a two-layer network".to_string(),
+            "trainer expects at least one hidden layer and one output layer".to_string(),
         ));
     }
     if target.len() != network.output_dim {
@@ -40,6 +40,16 @@ pub fn compute_gradients(
         )));
     }
 
+    let output_layer_index = network.layers.len() - 1;
+    let output_layer = &network.layers[output_layer_index];
+    if output_layer.neurons.len() != network.output_dim {
+        return Err(ManasError::InvalidNetwork(format!(
+            "output layer has {} neurons, expected {}",
+            output_layer.neurons.len(),
+            network.output_dim
+        )));
+    }
+
     let cache = network.forward_with_cache(input);
     let loss = mse_loss(&cache.output, target)?;
 
@@ -47,34 +57,72 @@ pub fn compute_gradients(
         .output
         .iter()
         .zip(target.iter())
-        .zip(network.layers[1].neurons.iter())
+        .zip(output_layer.neurons.iter())
         .map(|((actual, expected), neuron)| {
             let error_grad = 2.0 * (actual - expected) / network.output_dim as f32;
             error_grad * neuron.derivative_from_output(*actual)
         })
         .collect::<Vec<_>>();
 
-    let mut hidden_deltas = vec![0.0; network.hidden_dim];
-    for (output_delta, output_neuron) in output_deltas.iter().zip(network.layers[1].neurons.iter())
-    {
-        for (hidden_delta, weight) in hidden_deltas.iter_mut().zip(output_neuron.weights.iter()) {
-            *hidden_delta += output_delta * weight;
+    let mut hidden_deltas = cache
+        .hidden_layers
+        .iter()
+        .map(|layer| vec![0.0; layer.len()])
+        .collect::<Vec<_>>();
+    for output_neuron in &output_layer.neurons {
+        if output_neuron.weights.len() != cache.hidden.len() {
+            return Err(ManasError::InvalidNetwork(format!(
+                "output neuron {} has {} weights, expected {}",
+                output_neuron.id,
+                output_neuron.weights.len(),
+                cache.hidden.len()
+            )));
         }
     }
 
-    for ((hidden_delta, hidden_activation), hidden_neuron) in hidden_deltas
-        .iter_mut()
-        .zip(cache.hidden.iter())
-        .zip(network.layers[0].neurons.iter())
-    {
-        *hidden_delta *= hidden_neuron.derivative_from_output(*hidden_activation);
+    let mut global_hidden_index = 0;
+    for layer_deltas in &mut hidden_deltas {
+        for hidden_delta in layer_deltas {
+            for (output_delta, output_neuron) in
+                output_deltas.iter().zip(output_layer.neurons.iter())
+            {
+                *hidden_delta += output_delta * output_neuron.weights[global_hidden_index];
+            }
+            global_hidden_index += 1;
+        }
     }
 
-    let mut gradients =
-        Vec::with_capacity(network.layers[0].neurons.len() + network.layers[1].neurons.len());
+    for layer_index in (0..output_layer_index).rev() {
+        for (neuron_index, hidden_delta) in hidden_deltas[layer_index].iter_mut().enumerate() {
+            let activation = cache.hidden_layers[layer_index][neuron_index];
+            let neuron = &network.layers[layer_index].neurons[neuron_index];
+            *hidden_delta *= neuron.derivative_from_output(activation);
+        }
 
-    for (output_neuron, output_delta) in network.layers[1].neurons.iter().zip(output_deltas.iter())
-    {
+        if layer_index > 0 {
+            let current_deltas = hidden_deltas[layer_index].clone();
+            for (neuron, delta) in network.layers[layer_index]
+                .neurons
+                .iter()
+                .zip(current_deltas.iter())
+            {
+                for (previous_delta, weight) in hidden_deltas[layer_index - 1]
+                    .iter_mut()
+                    .zip(neuron.weights.iter())
+                {
+                    *previous_delta += delta * weight;
+                }
+            }
+        }
+    }
+
+    let hidden_neuron_count = network.layers[..output_layer_index]
+        .iter()
+        .map(|layer| layer.neurons.len())
+        .sum::<usize>();
+    let mut gradients = Vec::with_capacity(hidden_neuron_count + output_layer.neurons.len());
+
+    for (output_neuron, output_delta) in output_layer.neurons.iter().zip(output_deltas.iter()) {
         gradients.push((
             output_neuron.id,
             NeuronGradients {
@@ -88,19 +136,29 @@ pub fn compute_gradients(
         ));
     }
 
-    for (hidden_neuron, hidden_delta) in network.layers[0].neurons.iter().zip(hidden_deltas.iter())
-    {
-        gradients.push((
-            hidden_neuron.id,
-            NeuronGradients {
-                weight_gradients: cache
-                    .input
-                    .iter()
-                    .map(|input_value| hidden_delta * input_value)
-                    .collect(),
-                bias_gradient: *hidden_delta,
-            },
-        ));
+    for (layer_index, layer_deltas) in hidden_deltas.iter().enumerate().take(output_layer_index) {
+        let layer_input = if layer_index == 0 {
+            &cache.input
+        } else {
+            &cache.hidden_layers[layer_index - 1]
+        };
+
+        for (hidden_neuron, hidden_delta) in network.layers[layer_index]
+            .neurons
+            .iter()
+            .zip(layer_deltas.iter())
+        {
+            gradients.push((
+                hidden_neuron.id,
+                NeuronGradients {
+                    weight_gradients: layer_input
+                        .iter()
+                        .map(|input_value| hidden_delta * input_value)
+                        .collect(),
+                    bias_gradient: *hidden_delta,
+                },
+            ));
+        }
     }
 
     Ok((loss, gradients))
@@ -123,4 +181,31 @@ fn dot(left: &[f32], right: &[f32]) -> f32 {
         .zip(right.iter())
         .map(|(left_value, right_value)| left_value * right_value)
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manas_core::Network;
+
+    #[test]
+    fn layer_growth_gradients_support_deep_network() {
+        let mut network = Network::new_empty(4);
+        network.grow_neuron(0, 4).unwrap();
+        network.grow_layer(1, 1).unwrap();
+
+        let input = [0.5, -0.25, 0.75, 0.1];
+        let target = [0.1, 0.2, 0.3, 0.4];
+        let (loss, gradients) = compute_gradients(&network, &input, &target).unwrap();
+
+        assert!(loss.is_finite());
+        assert_eq!(gradients.len(), network.neuron_count() as usize);
+        assert!(gradients.iter().all(|(_, gradient)| {
+            gradient
+                .weight_gradients
+                .iter()
+                .all(|value| value.is_finite())
+                && gradient.bias_gradient.is_finite()
+        }));
+    }
 }

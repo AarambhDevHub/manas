@@ -85,7 +85,7 @@ from Stage 2 onward.**
 | Stage 14 | Inspect, neurons, and debug commands | Complete |
 | Stage 15 | Compression and forget command | Complete |
 | Stage 16 | Benchmarks and test suite | Complete |
-| Stage 17 | Layer growth | Planned |
+| Stage 17 | Layer growth | Complete |
 | Stage 18 | Internet agent (future) | Planned |
 | Stage 19 | Language generation (future) | Planned |
 
@@ -2054,11 +2054,26 @@ fn deeper_network_can_represent_more_facts() {
 
 ### Done When
 
-- [ ] All layer growth tests pass
-- [ ] Anti-forgetting test passes with 2-layer networks
-- [ ] Layer count never exceeds `MAX_LAYERS`
-- [ ] `manas inspect` shows correct layer count and per-layer stats
-- [ ] `cargo test -p manas-core layer_growth` passes clean
+- [x] All layer growth tests pass
+- [x] Anti-forgetting test passes with 2-layer networks
+- [x] Layer count never exceeds `MAX_LAYERS`
+- [x] `manas inspect` shows correct layer count and per-layer stats
+- [x] `cargo test -p manas-core layer_growth` passes clean
+
+### Stage 17 Implementation Notes
+
+- Generalized `Network` to support multiple hidden layers plus a final output
+  layer.
+- Kept old bound answer columns stable by making the output layer read a
+  flattened vector of all hidden activations.
+- Changed `grow_layer` from Stage 7 compatibility widening into real hidden
+  layer insertion before the output layer.
+- Generalized forward caches, backpropagation, bound readout, trainer growth,
+  diagnostics, and `.manas` validation for deep networks.
+- Kept compression conservative: hidden compaction still only runs on the
+  original two-layer topology.
+- Added Stage 17 coverage for core growth, deep gradients, trainer layer growth,
+  deep persistence, and CLI inspect/query.
 
 ---
 

@@ -6,12 +6,12 @@ Mode: `full`
 
 | ID | Benchmark | Result | Unit | Detail |
 |---|---|---:|---|---|
-| B1 | single teach | 0.0384 | ms/op | 25 iterations |
-| B2 | single ask | 0.0190 | ms/op | 200 iterations |
-| B3 | .manas save | 0.4677 | ms/op | 25 iterations |
-| B4 | .manas load | 0.1514 | ms/op | 50 iterations |
-| B5 | tokenizer 1000 words | 0.3946 | ms/op | 100 iterations |
-| B6 | anti-forgetting proof | 0.3630 | s | single fixed seed |
+| B1 | single teach | 0.0446 | ms/op | 25 iterations |
+| B2 | single ask | 0.0187 | ms/op | 200 iterations |
+| B3 | .manas save | 0.1718 | ms/op | 25 iterations |
+| B4 | .manas load | 0.1518 | ms/op | 50 iterations |
+| B5 | tokenizer 1000 words | 0.3843 | ms/op | 100 iterations |
+| B6 | anti-forgetting proof | 0.4043 | s | single fixed seed |
 | B7 | 1000-neuron footprint | 419.6875 | KiB | estimated heap footprint, total=1000 |
 | B8 | brain growth per fact | 768.8750 | bytes/fact | n=32, min=646, max=4534 |
 

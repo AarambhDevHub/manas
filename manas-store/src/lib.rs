@@ -478,21 +478,25 @@ fn validate_vocab_entries(entries: &[VocabEntry], embed_dim: usize) -> Result<u3
 }
 
 fn validate_network_for_save(network: &Network) -> Result<(), ManasError> {
-    if network.layers.len() != 2 {
-        return Err(ManasError::InvalidNetwork(format!(
-            "Stage 4 persistence expects exactly 2 layers, found {}",
-            network.layers.len()
-        )));
-    }
-    if network.layers[0].neurons.len() != network.hidden_dim {
+    let hidden_dim = network
+        .layers
+        .iter()
+        .take(network.layers.len().saturating_sub(1))
+        .map(|layer| layer.neurons.len())
+        .sum::<usize>();
+    if hidden_dim != network.hidden_dim {
         return Err(ManasError::InvalidNetwork(
-            "hidden dimension does not match hidden layer size".to_string(),
+            "hidden dimension does not match hidden layer feature count".to_string(),
         ));
     }
-    if network.layers[1].neurons.is_empty() {
-        if !network.layers[0].neurons.is_empty() {
+    let output_layer = network
+        .layers
+        .last()
+        .ok_or_else(|| ManasError::InvalidNetwork("network has no layers".to_string()))?;
+    if output_layer.neurons.is_empty() {
+        if hidden_dim > 0 {
             return Err(ManasError::InvalidNetwork(
-                "non-empty hidden layer requires output neurons".to_string(),
+                "non-empty hidden layers require output neurons".to_string(),
             ));
         }
         if network.output_dim != network.input_dim {
@@ -500,7 +504,7 @@ fn validate_network_for_save(network: &Network) -> Result<(), ManasError> {
                 "empty network output dimension must match input dimension".to_string(),
             ));
         }
-    } else if network.layers[1].neurons.len() != network.output_dim {
+    } else if output_layer.neurons.len() != network.output_dim {
         return Err(ManasError::InvalidNetwork(
             "output dimension does not match output layer size".to_string(),
         ));
