@@ -1,6 +1,7 @@
 //! Learning utilities for the Manas associative-memory engine.
 
 pub mod backprop;
+pub mod compression;
 pub mod decoder;
 pub mod diagnostics;
 pub mod embedder;
@@ -11,6 +12,11 @@ pub mod importance;
 pub mod tokenizer;
 pub mod trainer;
 
+pub use compression::{
+    CompressionCandidate, CompressionConfig, CompressionPlan, CompressionReport,
+    CompressionSkipCounts, DEFAULT_COMPRESSION_THRESHOLD, DEFAULT_MIN_IDLE_DAYS,
+    DEFAULT_MIN_MERGE_SIMILARITY, compress, plan_compression,
+};
 pub use diagnostics::{
     BrainDiagnostics, FreshnessDiagnostics, LayerDiagnostics, LearningDiagnostics,
     NetworkDiagnostics, NeuronActivationDiagnostic, NeuronDiagnostics, NeuronFilter,

@@ -83,7 +83,7 @@ from Stage 2 onward.**
 | Stage 12 | Freshness system | Complete |
 | Stage 13 | The real demo | Complete |
 | Stage 14 | Inspect, neurons, and debug commands | Complete |
-| Stage 15 | Compression and forget command | Next |
+| Stage 15 | Compression and forget command | Complete |
 | Stage 16 | Benchmarks and test suite | Planned |
 | Stage 17 | Layer growth | Planned |
 | Stage 18 | Internet agent (future) | Planned |
@@ -1848,6 +1848,12 @@ Freshness
 
 **Goal:** Low-importance neurons can be merged or removed to keep the brain small.
 
+**Status:** Complete. `manas forget` now supports dry-run planning and real
+compression. The implementation is conservative: it only removes stale,
+low-importance `Open` hidden neurons whose output column can be merged into a
+highly similar retained neighbor, and it never touches `Frozen` neurons or
+frozen output edges.
+
 ### What to Build
 
 ```bash
@@ -1864,10 +1870,10 @@ Freshness
 ### Compression Logic
 
 ```rust
-pub fn compress(network: &mut Network, threshold: f32) -> CompressionReport {
+pub fn compress(network: &mut Network, config: &CompressionConfig) -> CompressionReport {
     // find all Open neurons with importance_score < threshold
     // that have not been activated in > 30 days
-    // merge their weights into the nearest Guarded neighbor
+    // merge their output column into a highly similar retained neighbor
     // remove the low-importance neuron
     // recompute importance scores
 }
@@ -1902,11 +1908,22 @@ fn anti_forgetting_test_still_passes_after_compression() {
 
 ### Done When
 
-- [ ] All compression tests pass
-- [ ] Frozen neurons are never touched
-- [ ] Anti-forgetting test still passes after compression
-- [ ] Brain file size decreases after compression
-- [ ] `cargo test -p manas-learn compression` passes
+- [x] All compression tests pass
+- [x] Frozen neurons are never touched
+- [x] Anti-forgetting test still passes after compression
+- [x] Brain file size decreases after compression
+- [x] `cargo test -p manas-learn compression` passes
+
+### Stage 15 Implementation Notes
+
+- Added `Network::merge_remove_hidden_neurons` so hidden neurons and matching
+  output columns are compacted atomically.
+- Added `manas-learn::compression` with dry-run plans, reports, conservative
+  candidate filtering, and importance recomputation after compression.
+- Added `manas forget`, `manas forget --dry-run`, and
+  `manas forget --threshold N`.
+- Added core, learning, and CLI tests for compaction, frozen protection, dry-run
+  behavior, file-size shrinkage, and anti-forgetting after compression.
 
 ---
 

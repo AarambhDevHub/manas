@@ -26,6 +26,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 12 — Freshness system.
 - Stage 13 — The real demo.
 - Stage 14 — Inspect, neurons, and debug commands.
+- Stage 15 — Compression and forget command.
 
 ### Added
 
@@ -94,10 +95,20 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added `manas neurons` with protection and source filters, plus `manas trace`
   with query variants, selected neuron, top hidden activations, and top output
   values.
+- Added `Network::merge_remove_hidden_neurons` for atomic hidden-neuron
+  compaction that keeps output weights and protection metadata aligned.
+- Added `manas-learn::compression` with dry-run compression plans, conservative
+  candidate filtering, report types, and importance recomputation.
+- Added `manas forget`, `manas forget --dry-run`, and
+  `manas forget --threshold N` for shrinking stale low-importance mergeable
+  neurons without touching frozen knowledge.
+- Added compression tests proving neuron count reduction, frozen-neuron safety,
+  high-importance survival, anti-forgetting after compression, dry-run behavior,
+  and brain file-size shrinkage.
 
 ### Next
 
-- Stage 15 — Compression and forget command.
+- Stage 16 — Benchmarks and test suite.
 
 ---
 

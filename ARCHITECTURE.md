@@ -430,7 +430,8 @@ manas/
 │       ├── backprop.rs     ← MSE loss, gradient computation
 │       ├── trainer.rs      ← learn(), query(), grow decision logic
 │       ├── importance.rs   ← importance scoring, promotion logic
-│       └── diagnostics.rs  ← inspect, neuron list, trace data models
+│       ├── diagnostics.rs  ← inspect, neuron list, trace data models
+│       └── compression.rs  ← forget plans and safe compaction reports
 │
 ├── manas-ingest/           ← INPUT PIPELINE
 │   ├── Cargo.toml          ← deps: manas-core
@@ -885,10 +886,13 @@ manas ask "<QUESTION>"    Ask a question — answered from neural weights
 manas inspect             Show brain, network, learning, freshness, source, layer stats
 manas neurons             List/filter neurons with importance, protection, source
 manas trace "<QUESTION>"  Trace query variants, activations, and output values
+manas forget [--dry-run]  Compress stale low-importance mergeable neurons
 manas reset               Delete the brain and start fresh
 ```
 
-`forget` is a later milestone.
+`forget` is conservative: it never removes `Frozen` neurons, never rewrites
+frozen output edges, and only removes low-importance `Open` hidden neurons when
+their output column can be merged into a highly similar retained neighbor.
 
 #### `manas teach` Output Format
 
