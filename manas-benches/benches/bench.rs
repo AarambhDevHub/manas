@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use manas_core::{Network, ProtectionLevel};
+use manas_language::LanguageGenerator;
 use manas_learn::fixtures::{
     ANCHOR_FACTS, ANCHOR_NEURONS_PER_FACT, ANCHOR_TRAIN_EPOCHS, EMBED_DIM, HIDDEN_DIM,
     LEARNING_RATE, NOISE_FACTS, NOISE_TRAIN_EPOCHS, OUTPUT_DIM,
@@ -59,6 +60,7 @@ fn run_benchmarks(mode: Mode) -> Vec<BenchResult> {
         bench_anti_forgetting(),
         bench_memory_1000_neurons(),
         bench_file_growth_per_fact(mode),
+        bench_single_generate(mode),
     ]
 }
 
@@ -268,6 +270,35 @@ fn bench_file_growth_per_fact(mode: Mode) -> BenchResult {
         value: average,
         unit: "bytes/fact",
         detail: format!("n={fact_count}, min={min}, max={max}"),
+    }
+}
+
+fn bench_single_generate(mode: Mode) -> BenchResult {
+    let iterations = iterations(mode, 25, 200);
+    let mut network = Network::new_empty(EMBED_DIM);
+    let mut trainer = Trainer::with_seed(42, EMBED_DIM, LEARNING_RATE);
+    trainer
+        .learn(
+            &mut network,
+            "cat",
+            "small domesticated animal with fur and whiskers",
+        )
+        .expect("generation benchmark setup should learn");
+    let generator = LanguageGenerator::default();
+
+    let elapsed = repeat(iterations, || {
+        let result = generator
+            .generate(&trainer, &network, "What is a cat?")
+            .expect("generation benchmark should generate");
+        black_box(result.text);
+    });
+
+    BenchResult {
+        id: "B9",
+        name: "single generate",
+        value: millis_per_iter(elapsed, iterations),
+        unit: "ms/op",
+        detail: format!("{iterations} iterations"),
     }
 }
 

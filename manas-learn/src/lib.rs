@@ -31,4 +31,6 @@ pub use freshness::{
 };
 pub use importance::{GUARDED_TO_FROZEN_IMPORTANCE, OPEN_TO_GUARDED_IMPORTANCE};
 pub use tokenizer::Tokenizer;
-pub use trainer::{AnswerSource, EncodedFact, LearnReport, ProtectionReport, QueryResult, Trainer};
+pub use trainer::{
+    AnswerSource, EncodedFact, LearnReport, ProtectionReport, QueryResult, QueryStyle, Trainer,
+};

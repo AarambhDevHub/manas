@@ -56,6 +56,10 @@ rm -f brain.manas.sources brain.manas.sourceindex
 ./manas ask "What is a cat?"
 # Answer: small domesticated animal fur whiskers
 # Answered from: neural weights ✅
+
+./manas generate "What is a cat?"
+# Generated: A cat is a small domesticated animal with fur and whiskers.
+# Generated from: neural weights ✅
 ```
 
 This is the test v1 failed. v2 is built to pass it.
@@ -136,7 +140,7 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 16 | Benchmarks and test suite | Complete |
 | Stage 17 | Layer growth | Complete |
 | Stage 18 | Internet refresh agent | Complete |
-| Stage 19+ | Language generation | Planned |
+| Stage 19 | Language generation | Complete |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -176,6 +180,9 @@ bound answer columns intact.
 Stage 18 adds an explicit internet refresh path: `manas refresh` finds stale
 Realtime memories, fetches updated facts through DuckDuckGo, re-teaches the
 updated answer into neural weights, and leaves `manas ask` local-only.
+Stage 19 adds local language generation: `manas generate` and
+`manas ask --fluent` turn neural-weight answer concepts into one fluent
+sentence while default `manas ask` remains compact retrieval.
 
 Run the proof:
 
@@ -197,7 +204,7 @@ Run the maintained crate proof:
 cargo test -p manas-learn anti_forgetting
 ```
 
-Run the v0.1.0 real demo:
+Run the v2 neural-weights demo:
 
 ```bash
 bash demo.sh
@@ -269,6 +276,13 @@ cargo test -p manas-agent
 cargo test -p manas-cli refresh
 ```
 
+Run the Stage 19 language-generation proof:
+
+```bash
+cargo test -p manas-language
+cargo test -p manas-cli stage19
+```
+
 Run the benchmarks:
 
 ```bash
@@ -295,9 +309,18 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design.
 
 ---
 
-## Build from Source
+## Install
 
-Manas v2 has no release binaries yet. Build from source:
+Download the Manas v2 Linux release binary:
+
+```bash
+curl -fsSL https://github.com/AarambhDevHub/manas/releases/download/v2.0.0/manas-linux-x86_64.tar.gz \
+  | tar -xz
+sudo mv manas-linux-x86_64 /usr/local/bin/manas
+manas --help
+```
+
+Or build from source:
 
 ```bash
 # install Rust if you haven't
@@ -322,28 +345,28 @@ cargo build --workspace --release
 
 ## Architecture
 
-Manas v2 is built from 6 runtime Rust crates plus one benchmark tooling crate:
+Manas v2 is built from 7 runtime Rust crates plus one benchmark tooling crate:
 
 ```
 ┌──────────────────────────────────────────┐
 │              manas-cli                   │
-│   teach | ask | inspect | neurons        │
-│   trace | forget | refresh | reset       │
+│ teach | ask | generate | inspect         │
+│ neurons | trace | forget | refresh       │
+│ reset                                    │
 └───────────────────┬──────────────────────┘
                     │
      ┌──────────────┼──────────────┬──────────────┐
      ▼              ▼              ▼              ▼
 ┌─────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐
 │ manas-  │  │  manas-   │  │  manas-   │  │  manas-   │
-│ ingest  │  │  learn    │  │  store    │  │  agent    │
+│ ingest  │  │  learn    │  │ language  │  │  agent    │
 │         │  │           │  │           │  │           │
-│ text    │  │ tokenizer │  │ .manas    │  │ refresh   │
-│ files   │  │ embedder  │  │ binary    │  │ DuckDuckGo│
-│ folders │  │ backprop  │  │ format    │  │ fetch     │
-│ formats │  │ trainer   │  │ CRC32     │  │ parse     │
-└────┬────┘  └─────┬─────┘  └───────────┘  └─────┬─────┘
-     │              │                             │
-     └──────┬───────┴─────────────────────────────┘
+│ text    │  │ tokenizer │  │ fluent    │  │ refresh   │
+│ files   │  │ embedder  │  │ sentence  │  │ DuckDuckGo│
+│ folders │  │ trainer   │  │ output    │  │ fetch     │
+└────┬────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘
+     │              │              │              │
+     └──────┬───────┴──────┬───────┴──────────────┘
             ▼
 ┌──────────────────────────────────────────┐
 │              manas-core                  │
@@ -356,16 +379,24 @@ Manas v2 is built from 6 runtime Rust crates plus one benchmark tooling crate:
 └──────────────────────────────────────────┘
             │
             ▼
+┌──────────────────────────────────────────┐
+│              manas-store                 │
+│  .manas binary format, vocab, neurons,   │
+│  metadata, CRC32 integrity               │
+└──────────────────────────────────────────┘
+            │
+            ▼
      [ brain.manas ]
      one file, everything inside
      starts: ~1 KB
      grows: one neuron at a time
 ```
 
-**No `manas-language` crate.** No `manas-memory` crate.
-The transformer path from v1 is removed. The text sidecar from v1 is removed.
-The answering system from v1 is replaced with direct neural weight retrieval.
-`manas-agent` is refresh-only; it is not used by `manas ask`.
+`manas-language` is a fluent generation layer over neural-weight query results.
+It does not answer from sidecars and does not replace the associative memory
+engine. The text sidecar from v1 is removed. The answering system from v1 is
+replaced with direct neural weight retrieval.
+`manas-agent` is refresh-only; it is not used by default `manas ask`.
 
 `manas-benches` is a non-runtime workspace crate used for Stage 16 benchmark
 measurement and CI smoke coverage.
@@ -462,10 +493,21 @@ manas/
 │       ├── folder_walker.rs
 │       └── format/
 │
-└── manas-cli/              ← user commands, thin layer only
-    └── src/
-        ├── main.rs
-        └── commands/
+├── manas-agent/            ← explicit internet refresh only
+│   └── src/
+│       └── lib.rs
+│
+├── manas-language/         ← fluent generation over neural concepts
+│   └── src/
+│       └── lib.rs
+│
+├── manas-cli/              ← user commands, thin layer only
+│   └── src/
+│       └── main.rs
+│
+└── manas-benches/          ← benchmark harness
+    └── benches/
+        └── bench.rs
 ```
 
 ---

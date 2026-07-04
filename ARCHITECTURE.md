@@ -29,7 +29,8 @@
     - [manas-learn](#103-manas-learn)
     - [manas-ingest](#104-manas-ingest)
     - [manas-agent](#105-manas-agent)
-    - [manas-cli](#106-manas-cli)
+    - [manas-language](#106-manas-language)
+    - [manas-cli](#107-manas-cli)
 11. [The .manas Binary Format](#11-the-manas-binary-format)
 12. [Data Flow — Full Pipeline](#12-data-flow--full-pipeline)
 13. [Neuron Lifecycle](#13-neuron-lifecycle)
@@ -460,25 +461,31 @@ manas/
 │   └── src/
 │       └── lib.rs          ← DuckDuckGo client, fixtures, refresh planner
 │
+├── manas-language/         ← FLUENT GENERATION
+│   ├── Cargo.toml          ← deps: manas-core, manas-learn
+│   └── src/
+│       └── lib.rs          ← sentence generation over neural concepts
+│
 ├── manas-cli/              ← USER INTERFACE
-    ├── Cargo.toml          ← deps: all crates above
-    └── src/
-        └── main.rs         ← std-only arg parsing, command routing, formatting
+│   ├── Cargo.toml          ← deps: all runtime crates
+│   └── src/
+│       └── main.rs         ← std-only arg parsing, command routing, formatting
 │
 └── manas-benches/          ← TOOLING ONLY
     └── benches/
-        └── bench.rs        ← B1-B8 benchmark harness, BENCHMARKS.md generator
+        └── bench.rs        ← B1-B9 benchmark harness, BENCHMARKS.md generator
 ```
 
-**Runtime crates: 6** (v1 had 9 — simpler is better)
+**Runtime crates: 7**
 
 **Tooling crates: 1** (`manas-benches`, not part of the runtime path)
 
-**No `manas-language` crate** — the transformer path from v1 is removed.
-Language generation is a future milestone, not the foundation.
+**`manas-language` is generation-only** — it turns neural-weight query concepts
+into fluent sentences. It does not store knowledge, answer from sidecars, or
+replace associative memory.
 
 **`manas-agent` is refresh-only** — it powers explicit `manas refresh`.
-It is not used by `manas ask`, which remains neural-weight retrieval only.
+It is not used by default `manas ask`, which remains neural-weight retrieval only.
 
 **No `manas-memory` crate** — importance scoring and protection now live
 directly inside `manas-core` and `manas-learn` where they belong.
@@ -900,7 +907,33 @@ through `manas-learn`. It does not answer questions directly.
 
 ---
 
-### 10.6 `manas-cli`
+### 10.6 `manas-language`
+
+Fluent language generation over associative-memory answers. This crate keeps
+generation separate from retrieval: `manas-learn` answers from weights first,
+then `manas-language` realizes the decoded concepts into a sentence.
+
+**Dependencies:** `manas-core`, `manas-learn`
+
+```rust
+pub struct GenerationConfig {
+    pub max_words: usize,
+}
+
+pub struct GenerationResult {
+    pub text: String,
+    pub confidence: f32,
+    pub answered_from: AnswerSource,
+    pub freshness_warning: Option<FreshnessWarning>,
+    pub concepts: Vec<String>,
+}
+
+pub struct LanguageGenerator { ... }
+```
+
+No `.manas` format change is required. Generation is deterministic and local.
+
+### 10.7 `manas-cli`
 
 User-facing commands. Thin layer over the learning engine.
 **All business logic lives in the crates above. The CLI only routes and formats.**
@@ -913,7 +946,11 @@ external CLI parsing can be added later if needed.
 ```
 manas teach <text|file|folder> [--recursive]
                           Teach raw text, a supported file, or a folder
-manas ask "<QUESTION>"    Ask a question — answered from neural weights
+manas ask [--fluent] "<QUESTION>"
+                          Ask a question from neural weights; `--fluent`
+                          formats the neural concepts as a sentence
+manas generate "<PROMPT>" [--max-words N]
+                          Generate a fluent sentence from learned neural concepts
 manas inspect             Show brain, network, learning, freshness, source, layer stats
 manas neurons             List/filter neurons with importance, protection, source
 manas trace "<QUESTION>"  Trace query variants, activations, and output values
@@ -966,6 +1003,19 @@ Confidence
   0.87
 
 Answered from
+  neural weights
+```
+
+#### `manas generate` Output Format
+
+```
+Generated
+  A cat is a small domesticated animal with fur and whiskers.
+
+Confidence
+  0.87
+
+Generated from
   neural weights
 ```
 
@@ -1186,7 +1236,8 @@ Note
   This knowledge may be outdated (Fast freshness, learned 47 days ago).
 ```
 
-The internet agent (future milestone) will use freshness to decide when to re-fetch.
+The internet agent uses freshness to decide when explicit refresh should
+re-fetch stale memories.
 
 ---
 
@@ -1233,6 +1284,7 @@ benchmark harness:
 | B6 | Full anti-forgetting proof |
 | B7 | Estimated 1000-neuron memory footprint |
 | B8 | Brain file growth per new fact |
+| B9 | Single fluent generation |
 
 The committed benchmark report is generated with:
 

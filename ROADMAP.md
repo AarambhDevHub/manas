@@ -87,7 +87,7 @@ from Stage 2 onward.**
 | Stage 16 | Benchmarks and test suite | Complete |
 | Stage 17 | Layer growth | Complete |
 | Stage 18 | Internet refresh agent | Complete |
-| Stage 19 | Language generation (future) | Planned |
+| Stage 19 | Language generation | Complete |
 
 ---
 
@@ -1761,7 +1761,7 @@ Search results from DuckDuckGo...
   22-fact proof
 - Current proof result: `bash demo.sh` passes with `brain.manas` at about 83KB
 
-**This is v0.1.0. The first real version of Manas.**
+**This was the v0.1.0 milestone: the first real proof version of Manas v2.**
 
 ---
 
@@ -2129,16 +2129,54 @@ detect stale hidden memory with stored refresh input/target
 
 ---
 
-## Stage 19 — Language Generation (Future)
+## Stage 19 — Language Generation
 
 **Goal:** Manas can generate sentences from what it has learned, not just retrieve facts.
 
-**Not started until Stage 17 is complete.**
+**Status:** Complete. Generation is explicit through `manas generate` and
+optional through `manas ask --fluent`; default `manas ask` remains compact
+neural-weight retrieval.
 
 This is the only stage where a small transformer-style language path may be added.
 But unlike v1, it will be built ON TOP of the working associative memory engine,
 not instead of it. The associative memory answers questions.
 Language generation is a separate capability for producing fluent text.
+
+### Behavior
+
+```bash
+./manas ask "What is a cat?"             # compact neural concepts
+./manas ask --fluent "What is a cat?"    # fluent sentence
+./manas generate "What is a cat?"        # explicit generation
+./manas generate "What is a cat?" --max-words 12
+```
+
+### Architecture
+
+```
+prompt
+  -> manas-learn expanded neural query
+  -> decoded answer concepts from weights
+  -> manas-language sentence realization
+  -> generated sentence with neural weights as source
+```
+
+### Done When
+
+- [x] `manas-language` is isolated from the core associative-memory engine.
+- [x] Generation uses `Trainer::query_with_style(..., QueryStyle::Expanded)`.
+- [x] Default `manas ask` stays compact and backward-compatible.
+- [x] `manas generate` and `manas ask --fluent` work through the CLI.
+- [x] Stage 19 tests prove generation works after historical sidecars are
+  deleted and still reports `neural weights` as the source.
+
+### Stage 19 Implementation Notes
+
+- Added configurable compact/expanded decoding; compact answers truncate long
+  packed answers instead of rejecting them.
+- Added deterministic prompt-intent realization for definition, location, time,
+  action, and fallback prompts.
+- Added B9 benchmark coverage for fluent generation.
 
 ---
 
@@ -2166,4 +2204,5 @@ These principles are the law. No milestone may violate them.
 | v0.2.0 | Stage 14-15 | Brain is inspectable and compressable. |
 | v0.3.0 | Stage 16 | Fully tested and benchmarked. |
 | v0.4.0 | Stage 17 | Network grows new layers automatically. |
-| v1.0.0 | All stages | Stable, tested, documented, released. |
+| v0.5.0 | Stage 19 | Fluent local generation over neural-weight answers. |
+| v2.0.0 | All v2 stages | Stable Manas v2 release with local memory, refresh, and generation. |

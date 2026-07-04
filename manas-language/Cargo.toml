@@ -1,0 +1,8 @@
+[package]
+name = "manas-language"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+manas-core = { workspace = true }
+manas-learn = { workspace = true }

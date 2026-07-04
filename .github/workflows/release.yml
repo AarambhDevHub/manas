@@ -8,9 +8,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release-linux:
-    name: Build Linux Release
+    name: Build Linux x86_64 Release
     runs-on: ubuntu-latest
 
     steps:
@@ -29,8 +33,17 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run benchmark smoke
+        run: cargo bench -p manas-benches -- --quick
+
       - name: Build release binary
         run: cargo build --workspace --release
+
+      - name: Run neural-weights demo
+        run: bash demo.sh
 
       - name: Prepare artifact
         run: |
@@ -38,6 +51,7 @@ jobs:
           cp target/release/manas dist/manas-linux-x86_64
           chmod +x dist/manas-linux-x86_64
           tar -czf dist/manas-linux-x86_64.tar.gz -C dist manas-linux-x86_64
+          (cd dist && sha256sum manas-linux-x86_64.tar.gz > SHA256SUMS)
 
       - name: Resolve release notes path
         id: notes
@@ -55,15 +69,21 @@ jobs:
         if: steps.notes.outputs.found == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          name: Manas ${{ github.ref_name }}
           body_path: ${{ steps.notes.outputs.path }}
           files: |
             dist/manas-linux-x86_64.tar.gz
+            dist/SHA256SUMS
           generate_release_notes: false
+          fail_on_unmatched_files: true
 
       - name: Create GitHub Release (auto notes)
         if: steps.notes.outputs.found == 'false'
         uses: softprops/action-gh-release@v2
         with:
+          name: Manas ${{ github.ref_name }}
           files: |
             dist/manas-linux-x86_64.tar.gz
+            dist/SHA256SUMS
           generate_release_notes: true
+          fail_on_unmatched_files: true

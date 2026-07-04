@@ -13,3 +13,4 @@ manas-core   = { workspace = true }
 manas-store  = { workspace = true }
 manas-learn  = { workspace = true }
 manas-ingest = { workspace = true }
+manas-language = { workspace = true }
