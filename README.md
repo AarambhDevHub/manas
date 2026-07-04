@@ -134,7 +134,8 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 14 | Inspect, neurons, and debug commands | Complete |
 | Stage 15 | Compression and forget command | Complete |
 | Stage 16 | Benchmarks and test suite | Complete |
-| Stage 17+ | Layer growth, future agents | Planned |
+| Stage 17 | Layer growth | Complete |
+| Stage 18+ | Internet agent, language generation | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -168,6 +169,9 @@ Stage 16 adds a dedicated benchmark crate, committed benchmark report, CI
 benchmark smoke test, and an eight-test integration gate covering the demo,
 anti-forgetting, persistence, growth, protection, compression, freshness, and
 ingestion.
+Stage 17 adds real hidden-layer growth: when existing hidden memory is saturated,
+Manas can insert a new hidden layer before the output layer while keeping older
+bound answer columns intact.
 
 Run the proof:
 
@@ -245,6 +249,13 @@ Run the Stage 16 integration proof:
 
 ```bash
 cargo test -p manas-cli stage16
+```
+
+Run the Stage 17 layer-growth proof:
+
+```bash
+cargo test layer_growth
+cargo test stage17
 ```
 
 Run the benchmarks:

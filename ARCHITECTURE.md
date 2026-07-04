@@ -356,13 +356,16 @@ teach("paris is the capital of france")
 
 ### When a Layer Grows
 
-Real new-depth layer growth is a later milestone. Stage 7 widens the current
-hidden layer and keeps the engine in its proven two-layer shape.
+Stage 17 adds real new-depth layer growth. Hidden layers are all layers before
+the final output layer. The output layer reads a flattened vector of every
+hidden activation, so adding a new hidden layer appends new output columns
+without rewriting older bound answer columns.
 
 A new layer is added when:
-- All neurons in every layer are `Frozen` or `Guarded`
-- Loss is still above threshold after MAX_LAYER_ATTEMPTS
-- Network depth is below MAX_LAYERS
+- Existing hidden memory is saturated (`Guarded` or `Frozen`) or the deepest
+  hidden layer has reached `MAX_NEURONS_PER_LAYER`
+- Loss is still above threshold after update attempts
+- Network depth is below `MAX_LAYERS`
 
 ### Growth is Bounded
 

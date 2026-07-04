@@ -13,6 +13,7 @@ const GRAD_CLIP: f32 = 1.0;
 const DEFAULT_SEED: u64 = 42;
 const RIDGE: f32 = 1.0e-4;
 const ANCHOR_CONSTRAINT_WEIGHT: f32 = 50.0;
+const READOUT_TIE_EPSILON: f32 = 1.0e-3;
 
 /// Borrowed vector pair used by consolidation and readout fitting.
 #[derive(Clone, Copy)]
@@ -32,6 +33,7 @@ pub struct NeuronGradients {
 #[derive(Clone, Debug)]
 pub struct ForwardCache {
     pub input: Vec<f32>,
+    pub hidden_layers: Vec<Vec<f32>>,
     pub hidden: Vec<f32>,
     pub output: Vec<f32>,
 }
@@ -39,7 +41,12 @@ pub struct ForwardCache {
 /// Output reconstructed from one hidden neuron selected by activation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HiddenReadout {
+    /// Backward-compatible alias for `global_hidden_index`.
     pub hidden_index: usize,
+    pub layer_index: usize,
+    pub neuron_index: usize,
+    pub global_hidden_index: usize,
+    pub neuron_id: u64,
     pub activation: f32,
     pub output: Vec<f32>,
 }
@@ -154,11 +161,12 @@ impl Network {
     ) -> Result<Self, ManasError> {
         validate_persisted_layers(input_dim, &layers)?;
 
-        let hidden_dim = layers[0].neurons.len();
-        let output_dim = if layers[1].neurons.is_empty() {
+        let output_layer_index = layers.len() - 1;
+        let hidden_dim = hidden_feature_count_from_layers(&layers);
+        let output_dim = if layers[output_layer_index].neurons.is_empty() {
             input_dim
         } else {
-            layers[1].neurons.len()
+            layers[output_layer_index].neurons.len()
         };
         let total_neurons = layers.iter().map(|layer| layer.neurons.len() as u64).sum();
         let next_id = layers
@@ -188,15 +196,25 @@ impl Network {
     }
 
     pub fn forward_with_cache(&self, input: &[f32]) -> ForwardCache {
-        let hidden = self.layers[0].forward(input);
-        let output = if self.layers[1].neurons.is_empty() {
+        let mut hidden_layers = Vec::with_capacity(self.layers.len().saturating_sub(1));
+        let mut layer_input = input.to_vec();
+
+        for layer in self.hidden_layers() {
+            let activations = layer.forward(&layer_input);
+            layer_input = activations.clone();
+            hidden_layers.push(activations);
+        }
+
+        let hidden = flatten_hidden_layers(&hidden_layers);
+        let output = if self.output_layer().neurons.is_empty() {
             vec![0.0; self.output_dim]
         } else {
-            self.layers[1].forward(&hidden)
+            self.output_layer().forward(&hidden)
         };
 
         ForwardCache {
             input: input.to_vec(),
+            hidden_layers,
             hidden,
             output,
         }
@@ -226,46 +244,53 @@ impl Network {
     }
 
     pub fn grow_neuron(&mut self, layer_id: u32, input_size: usize) -> Result<u64, ManasError> {
-        if self.layers.len() != 2 {
-            return Err(ManasError::GrowthFailed(format!(
-                "Stage 7 growth expects exactly 2 layers, found {}",
-                self.layers.len()
-            )));
-        }
-        if layer_id != 0 {
+        let layer_index = self
+            .layers
+            .iter()
+            .position(|layer| layer.id == layer_id)
+            .ok_or(ManasError::LayerNotFound(layer_id))?;
+        if layer_index >= self.output_layer_index() {
             return Err(ManasError::LayerNotFound(layer_id));
         }
-        if input_size != self.input_dim {
+
+        let expected_input_size = self.hidden_layer_input_size(layer_index)?;
+        if input_size != expected_input_size {
             return Err(ManasError::GrowthFailed(format!(
                 "input size mismatch for growth: expected {}, found {}",
-                self.input_dim, input_size
+                expected_input_size, input_size
             )));
         }
-        if self.layers[0].neurons.len() >= MAX_NEURONS_PER_LAYER {
+        if self.layers[layer_index].neurons.len() >= MAX_NEURONS_PER_LAYER {
             return Err(ManasError::GrowthFailed(format!(
-                "layer 0 reached max hidden neurons ({MAX_NEURONS_PER_LAYER})"
+                "layer {layer_id} reached max hidden neurons ({MAX_NEURONS_PER_LAYER})"
             )));
         }
 
         let hidden_id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
-        let hidden_limit = xavier_limit(self.input_dim, self.hidden_dim.saturating_add(1));
+        let hidden_limit = xavier_limit(
+            expected_input_size,
+            self.layers[layer_index].neurons.len().saturating_add(1),
+        );
         let mut hidden_rng = SplitMix64::new(growth_seed(hidden_id));
         let hidden_neuron = Neuron::random(
             hidden_id,
             &mut hidden_rng,
-            self.input_dim,
+            expected_input_size,
             hidden_limit,
             Activation::Tanh,
         );
-        self.layers[0].neurons.push(hidden_neuron);
-        self.hidden_dim = self.layers[0].neurons.len();
+        let global_hidden_index = self.global_hidden_insert_index(layer_index)?;
+        self.layers[layer_index].neurons.push(hidden_neuron);
+        self.hidden_dim = self.hidden_feature_count();
         self.total_neurons = self.total_neurons.saturating_add(1);
 
-        if self.layers[1].neurons.is_empty() {
+        self.extend_next_hidden_layer_for_new_input(layer_index);
+
+        if self.output_layer().neurons.is_empty() {
             self.bootstrap_output_layer();
         } else {
-            self.extend_output_layer_for_hidden_neuron();
+            self.insert_output_edge_for_hidden_neuron(global_hidden_index);
         }
 
         Ok(hidden_id)
@@ -276,15 +301,102 @@ impl Network {
         input_size: usize,
         neuron_count: usize,
     ) -> Result<u32, ManasError> {
-        if self.layer_count() >= MAX_LAYERS && self.layers.len() > 2 {
+        if self.layer_count() >= MAX_LAYERS {
             return Err(ManasError::GrowthFailed(format!(
                 "network reached max layers ({MAX_LAYERS})"
             )));
         }
-        for _ in 0..neuron_count {
-            self.grow_neuron(0, input_size)?;
+        if neuron_count == 0 {
+            return Err(ManasError::GrowthFailed(
+                "new layer must contain at least one neuron".to_string(),
+            ));
         }
-        Ok(0)
+        if neuron_count > MAX_NEURONS_PER_LAYER {
+            return Err(ManasError::GrowthFailed(format!(
+                "new layer requested {neuron_count} neurons, max is {MAX_NEURONS_PER_LAYER}"
+            )));
+        }
+
+        let output_index = self.output_layer_index();
+        let expected_input_size = if output_index == 0 {
+            self.input_dim
+        } else {
+            self.layers[output_index - 1].neurons.len()
+        };
+        if expected_input_size == 0 {
+            return Err(ManasError::GrowthFailed(
+                "cannot grow a new layer before an empty hidden layer".to_string(),
+            ));
+        }
+        if input_size != expected_input_size {
+            return Err(ManasError::GrowthFailed(format!(
+                "input size mismatch for layer growth: expected {}, found {}",
+                expected_input_size, input_size
+            )));
+        }
+
+        let new_layer_id = output_index as u32;
+        let hidden_limit = xavier_limit(input_size, neuron_count);
+        let mut neurons = Vec::with_capacity(neuron_count);
+        for _ in 0..neuron_count {
+            let id = self.next_id;
+            self.next_id = self.next_id.saturating_add(1);
+            let mut rng = SplitMix64::new(growth_seed(id));
+            neurons.push(Neuron::random(
+                id,
+                &mut rng,
+                input_size,
+                hidden_limit,
+                Activation::Tanh,
+            ));
+        }
+
+        self.layers.insert(
+            output_index,
+            Layer {
+                id: new_layer_id,
+                neurons,
+                activation: Activation::Tanh,
+            },
+        );
+        self.renumber_layers();
+        self.total_neurons = self
+            .total_neurons
+            .saturating_add(neuron_count.try_into().unwrap_or(u64::MAX));
+        let old_hidden_dim = self.hidden_dim;
+        self.hidden_dim = self.hidden_feature_count();
+
+        if self.output_layer().neurons.is_empty() {
+            self.bootstrap_output_layer();
+        } else {
+            for global_index in old_hidden_dim..self.hidden_dim {
+                self.insert_output_edge_for_hidden_neuron(global_index);
+            }
+        }
+
+        Ok(self.layers[output_index].id)
+    }
+
+    pub fn should_grow_layer(&self) -> bool {
+        if self.layer_count() >= MAX_LAYERS {
+            return false;
+        }
+
+        let hidden_layers = self.hidden_layers();
+        if hidden_layers.is_empty() || hidden_layers.iter().all(|layer| layer.neurons.is_empty()) {
+            return false;
+        }
+
+        let all_hidden_saturated = hidden_layers
+            .iter()
+            .flat_map(|layer| layer.neurons.iter())
+            .all(|neuron| !matches!(neuron.protection_level, ProtectionLevel::Open));
+        let deepest_full = hidden_layers
+            .last()
+            .map(|layer| layer.neurons.len() >= MAX_NEURONS_PER_LAYER)
+            .unwrap_or(false);
+
+        all_hidden_saturated || deepest_full
     }
 
     pub fn neuron_count(&self) -> u64 {
@@ -332,12 +444,11 @@ impl Network {
             )));
         }
 
-        let index = self.layers[0]
-            .neurons
-            .iter()
-            .position(|neuron| neuron.id == neuron_id)
+        let (layer_index, neuron_index) = self
+            .hidden_location_by_id(neuron_id)
             .ok_or(ManasError::NeuronNotFound(neuron_id))?;
-        self.key_hidden_neurons_to_input(input, &[index], false);
+        let layer_input = self.hidden_input_for_layer(input, layer_index)?;
+        self.key_hidden_neuron_to_vector(layer_index, neuron_index, &layer_input, false);
         Ok(())
     }
 
@@ -361,27 +472,19 @@ impl Network {
                 target.len()
             )));
         }
-        if self.layers.len() != 2 {
-            return Err(ManasError::InvalidNetwork(format!(
-                "bound readout expects exactly 2 layers, found {}",
-                self.layers.len()
-            )));
-        }
-        if self.layers[1].neurons.len() != self.output_dim {
+        if self.output_layer().neurons.len() != self.output_dim {
             return Err(ManasError::InvalidNetwork(format!(
                 "output layer has {} neurons, expected {}",
-                self.layers[1].neurons.len(),
+                self.output_layer().neurons.len(),
                 self.output_dim
             )));
         }
 
-        let hidden_index = self.layers[0]
-            .neurons
-            .iter()
-            .position(|neuron| neuron.id == neuron_id)
+        let (layer_index, neuron_index) = self
+            .hidden_location_by_id(neuron_id)
             .ok_or(ManasError::NeuronNotFound(neuron_id))?;
         if !matches!(
-            self.layers[0].neurons[hidden_index].protection_level,
+            self.layers[layer_index].neurons[neuron_index].protection_level,
             ProtectionLevel::Open
         ) {
             return Err(ManasError::InvalidNetwork(format!(
@@ -389,79 +492,82 @@ impl Network {
             )));
         }
 
-        self.key_hidden_neurons_to_input(input, &[hidden_index], false);
-        self.layers[0].neurons[hidden_index].activation_count = self.layers[0].neurons
-            [hidden_index]
+        let layer_input = self.hidden_input_for_layer(input, layer_index)?;
+        self.key_hidden_neuron_to_vector(layer_index, neuron_index, &layer_input, false);
+        self.layers[layer_index].neurons[neuron_index].activation_count = self.layers[layer_index]
+            .neurons[neuron_index]
             .activation_count
             .saturating_add(1);
+        let global_hidden_index = self
+            .global_hidden_index(layer_index, neuron_index)
+            .ok_or_else(|| ManasError::InvalidNetwork("hidden index out of range".to_string()))?;
 
-        for (output_neuron, target_value) in self.layers[1].neurons.iter_mut().zip(target.iter()) {
-            if hidden_index >= output_neuron.weights.len() {
+        for (output_neuron, target_value) in self
+            .output_layer_mut()
+            .neurons
+            .iter_mut()
+            .zip(target.iter())
+        {
+            if global_hidden_index >= output_neuron.weights.len() {
                 return Err(ManasError::InvalidNetwork(format!(
                     "output neuron {} is missing hidden weight {}",
-                    output_neuron.id, hidden_index
+                    output_neuron.id, global_hidden_index
                 )));
             }
-            output_neuron.weights[hidden_index] = *target_value;
+            output_neuron.weights[global_hidden_index] = *target_value;
         }
 
-        Ok(hidden_index)
+        Ok(global_hidden_index)
     }
 
     pub fn readout_from_best_hidden(&self, input: &[f32]) -> Option<HiddenReadout> {
         if input.len() != self.input_dim
-            || self.layers.len() != 2
-            || self.layers[0].neurons.is_empty()
-            || self.layers[1].neurons.is_empty()
+            || self.hidden_feature_count() == 0
+            || self.output_layer().neurons.is_empty()
         {
             return None;
         }
 
-        let hidden = self.layers[0].forward(input);
-        let (hidden_index, activation) = hidden
-            .iter()
-            .enumerate()
-            .max_by(|left, right| {
-                left.1
-                    .partial_cmp(right.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(index, activation)| (index, *activation))?;
+        let cache = self.forward_with_cache(input);
+        let (global_hidden_index, activation) = best_hidden_activation(&cache.hidden)?;
 
         if activation <= f32::EPSILON {
             return None;
         }
 
-        let output = self.layers[1]
+        let output = self
+            .output_layer()
             .neurons
             .iter()
             .map(|output_neuron| {
                 output_neuron
                     .weights
-                    .get(hidden_index)
+                    .get(global_hidden_index)
                     .copied()
                     .unwrap_or(0.0)
             })
             .map(|weight| weight * activation)
             .collect::<Vec<_>>();
+        let (layer_index, neuron_index) =
+            self.hidden_location_by_global_index(global_hidden_index)?;
+        let neuron_id = self.layers[layer_index].neurons[neuron_index].id;
 
         Some(HiddenReadout {
-            hidden_index,
+            hidden_index: global_hidden_index,
+            layer_index,
+            neuron_index,
+            global_hidden_index,
+            neuron_id,
             activation,
             output,
         })
     }
 
     pub fn keyed_hidden_memory(&self) -> bool {
-        self.layers
-            .first()
-            .map(|layer| {
-                layer
-                    .neurons
-                    .iter()
-                    .all(|neuron| matches!(neuron.activation, Activation::Keyed))
-            })
-            .unwrap_or(false)
+        self.hidden_layers()
+            .iter()
+            .flat_map(|layer| layer.neurons.iter())
+            .any(|neuron| matches!(neuron.activation, Activation::Keyed))
     }
 
     pub fn merge_remove_hidden_neurons(
@@ -757,7 +863,7 @@ impl Network {
             let weights = solve_linear_system(gram.clone(), rhs)?;
 
             for (feature_index, hidden_index) in open_indices.iter().enumerate() {
-                let output_neuron = &mut self.layers[1].neurons[output_dim];
+                let output_neuron = &mut self.output_layer_mut().neurons[output_dim];
                 if matches!(
                     output_neuron.weight_protection[*hidden_index],
                     ProtectionLevel::Open
@@ -779,7 +885,7 @@ impl Network {
     }
 
     pub fn frozen_output_edge_count(&self) -> usize {
-        self.layers[1]
+        self.output_layer()
             .neurons
             .iter()
             .map(|neuron| {
@@ -912,7 +1018,7 @@ impl Network {
                     .zip(alpha.iter())
                     .map(|(row, alpha_value)| row[feature_index] * alpha_value)
                     .sum::<f32>();
-                let output_neuron = &mut self.layers[1].neurons[output_dim];
+                let output_neuron = &mut self.output_layer_mut().neurons[output_dim];
                 output_neuron.weights[*hidden_index] = weight;
                 output_neuron.weight_protection[*hidden_index] = ProtectionLevel::Frozen;
             }
@@ -922,14 +1028,14 @@ impl Network {
     }
 
     fn freeze_output_biases(&mut self) {
-        for output_neuron in &mut self.layers[1].neurons {
+        for output_neuron in &mut self.output_layer_mut().neurons {
             output_neuron.bias = 0.0;
             output_neuron.bias_protection = ProtectionLevel::Frozen;
         }
     }
 
     fn residual_after_frozen_output(&self, hidden: &[f32], target: &[f32]) -> Vec<f32> {
-        self.layers[1]
+        self.output_layer()
             .neurons
             .iter()
             .enumerate()
@@ -965,33 +1071,188 @@ impl Network {
 
     fn bootstrap_output_layer(&mut self) {
         let output_limit = xavier_limit(self.hidden_dim, self.output_dim);
-        self.layers[1].neurons = (0..self.output_dim)
-            .map(|_| {
-                let id = self.next_id;
-                self.next_id = self.next_id.saturating_add(1);
-                let mut rng = SplitMix64::new(growth_seed(id));
-                Neuron::random(
-                    id,
-                    &mut rng,
-                    self.hidden_dim,
-                    output_limit,
-                    Activation::Linear,
-                )
-            })
-            .collect();
+        let mut neurons = Vec::with_capacity(self.output_dim);
+        for _ in 0..self.output_dim {
+            let id = self.next_id;
+            self.next_id = self.next_id.saturating_add(1);
+            let mut rng = SplitMix64::new(growth_seed(id));
+            neurons.push(Neuron::random(
+                id,
+                &mut rng,
+                self.hidden_dim,
+                output_limit,
+                Activation::Linear,
+            ));
+        }
+        self.output_layer_mut().neurons = neurons;
         self.total_neurons = self
             .total_neurons
             .saturating_add(self.output_dim.try_into().unwrap_or(u64::MAX));
     }
 
-    fn extend_output_layer_for_hidden_neuron(&mut self) {
-        let output_limit = xavier_limit(self.hidden_dim, self.output_dim);
-        for output_neuron in &mut self.layers[1].neurons {
-            let mut rng = SplitMix64::new(growth_seed(output_neuron.id ^ self.hidden_dim as u64));
+    fn insert_output_edge_for_hidden_neuron(&mut self, global_hidden_index: usize) {
+        for output_neuron in &mut self.output_layer_mut().neurons {
+            output_neuron.weights.insert(global_hidden_index, 0.0);
             output_neuron
-                .weights
-                .push(rng.uniform_range(-output_limit, output_limit));
-            output_neuron.weight_protection.push(ProtectionLevel::Open);
+                .weight_protection
+                .insert(global_hidden_index, ProtectionLevel::Open);
+        }
+    }
+
+    fn output_layer_index(&self) -> usize {
+        self.layers.len().saturating_sub(1)
+    }
+
+    fn output_layer(&self) -> &Layer {
+        &self.layers[self.output_layer_index()]
+    }
+
+    fn output_layer_mut(&mut self) -> &mut Layer {
+        let index = self.output_layer_index();
+        &mut self.layers[index]
+    }
+
+    fn hidden_layers(&self) -> &[Layer] {
+        let output_index = self.output_layer_index();
+        &self.layers[..output_index]
+    }
+
+    fn hidden_feature_count(&self) -> usize {
+        hidden_feature_count_from_layers(&self.layers)
+    }
+
+    fn hidden_layer_input_size(&self, layer_index: usize) -> Result<usize, ManasError> {
+        if layer_index >= self.output_layer_index() {
+            return Err(ManasError::LayerNotFound(
+                self.layers
+                    .get(layer_index)
+                    .map(|layer| layer.id)
+                    .unwrap_or(u32::MAX),
+            ));
+        }
+        Ok(if layer_index == 0 {
+            self.input_dim
+        } else {
+            self.layers[layer_index - 1].neurons.len()
+        })
+    }
+
+    fn hidden_input_for_layer(
+        &self,
+        input: &[f32],
+        layer_index: usize,
+    ) -> Result<Vec<f32>, ManasError> {
+        if layer_index >= self.output_layer_index() {
+            return Err(ManasError::LayerNotFound(
+                self.layers
+                    .get(layer_index)
+                    .map(|layer| layer.id)
+                    .unwrap_or(u32::MAX),
+            ));
+        }
+
+        let mut layer_input = input.to_vec();
+        for layer in &self.layers[..layer_index] {
+            layer_input = layer.forward(&layer_input);
+        }
+        Ok(layer_input)
+    }
+
+    fn global_hidden_insert_index(&self, layer_index: usize) -> Result<usize, ManasError> {
+        if layer_index >= self.output_layer_index() {
+            return Err(ManasError::LayerNotFound(
+                self.layers
+                    .get(layer_index)
+                    .map(|layer| layer.id)
+                    .unwrap_or(u32::MAX),
+            ));
+        }
+        Ok(self.layers[..layer_index]
+            .iter()
+            .map(|layer| layer.neurons.len())
+            .sum::<usize>()
+            + self.layers[layer_index].neurons.len())
+    }
+
+    pub fn global_hidden_index(&self, layer_index: usize, neuron_index: usize) -> Option<usize> {
+        if layer_index >= self.output_layer_index()
+            || neuron_index >= self.layers.get(layer_index)?.neurons.len()
+        {
+            return None;
+        }
+        Some(
+            self.layers[..layer_index]
+                .iter()
+                .map(|layer| layer.neurons.len())
+                .sum::<usize>()
+                + neuron_index,
+        )
+    }
+
+    pub fn hidden_location_by_global_index(
+        &self,
+        global_hidden_index: usize,
+    ) -> Option<(usize, usize)> {
+        let mut offset = 0;
+        for (layer_index, layer) in self.hidden_layers().iter().enumerate() {
+            let next_offset = offset + layer.neurons.len();
+            if global_hidden_index < next_offset {
+                return Some((layer_index, global_hidden_index - offset));
+            }
+            offset = next_offset;
+        }
+        None
+    }
+
+    pub fn hidden_location_by_id(&self, neuron_id: u64) -> Option<(usize, usize)> {
+        self.hidden_layers()
+            .iter()
+            .enumerate()
+            .find_map(|(layer_index, layer)| {
+                layer
+                    .neurons
+                    .iter()
+                    .position(|neuron| neuron.id == neuron_id)
+                    .map(|neuron_index| (layer_index, neuron_index))
+            })
+    }
+
+    fn key_hidden_neuron_to_vector(
+        &mut self,
+        layer_index: usize,
+        neuron_index: usize,
+        input: &[f32],
+        freeze: bool,
+    ) {
+        let mut key = input.to_vec();
+        normalize_in_place(&mut key);
+
+        let neuron = &mut self.layers[layer_index].neurons[neuron_index];
+        for (weight, key_value) in neuron.weights.iter_mut().zip(key.iter()) {
+            *weight = *key_value;
+        }
+        neuron.bias = 0.0;
+        neuron.activation = Activation::Keyed;
+        if freeze {
+            neuron.freeze_all();
+        }
+    }
+
+    fn extend_next_hidden_layer_for_new_input(&mut self, layer_index: usize) {
+        let next_layer_index = layer_index + 1;
+        if next_layer_index >= self.output_layer_index() {
+            return;
+        }
+
+        for neuron in &mut self.layers[next_layer_index].neurons {
+            neuron.weights.push(0.0);
+            neuron.weight_protection.push(ProtectionLevel::Open);
+        }
+    }
+
+    fn renumber_layers(&mut self) {
+        for (index, layer) in self.layers.iter_mut().enumerate() {
+            layer.id = index as u32;
         }
     }
 
@@ -1000,11 +1261,46 @@ impl Network {
     }
 }
 
+fn hidden_feature_count_from_layers(layers: &[Layer]) -> usize {
+    layers
+        .iter()
+        .take(layers.len().saturating_sub(1))
+        .map(|layer| layer.neurons.len())
+        .sum()
+}
+
+fn flatten_hidden_layers(hidden_layers: &[Vec<f32>]) -> Vec<f32> {
+    let total = hidden_layers.iter().map(Vec::len).sum();
+    let mut hidden = Vec::with_capacity(total);
+    for layer in hidden_layers {
+        hidden.extend_from_slice(layer);
+    }
+    hidden
+}
+
+fn best_hidden_activation(hidden: &[f32]) -> Option<(usize, f32)> {
+    let mut best: Option<(usize, f32)> = None;
+    for (index, activation) in hidden.iter().copied().enumerate() {
+        let replace = match best {
+            None => true,
+            Some((best_index, best_activation)) => {
+                activation > best_activation + READOUT_TIE_EPSILON
+                    || ((activation - best_activation).abs() <= READOUT_TIE_EPSILON
+                        && index < best_index)
+            }
+        };
+        if replace {
+            best = Some((index, activation));
+        }
+    }
+    best
+}
+
 fn validate_persisted_layers(input_dim: usize, layers: &[Layer]) -> Result<(), ManasError> {
-    if layers.len() != 2 {
+    if !(2..=MAX_LAYERS).contains(&layers.len()) {
         return Err(ManasError::InvalidNetwork(format!(
-            "Stage 4 persistence expects exactly 2 layers, found {}",
-            layers.len()
+            "network expects between 2 and {MAX_LAYERS} layers, found {}",
+            layers.len(),
         )));
     }
     if input_dim == 0 {
@@ -1012,25 +1308,39 @@ fn validate_persisted_layers(input_dim: usize, layers: &[Layer]) -> Result<(), M
             "input dimension must be greater than zero".to_string(),
         ));
     }
-    if layers[0].neurons.is_empty() && !layers[1].neurons.is_empty() {
+
+    let output_index = layers.len() - 1;
+    let hidden_feature_count = hidden_feature_count_from_layers(layers);
+    let output_neurons = layers[output_index].neurons.len();
+    let any_hidden = hidden_feature_count > 0;
+
+    if !any_hidden && output_neurons > 0 {
         return Err(ManasError::InvalidNetwork(
-            "empty hidden layer cannot have output neurons".to_string(),
+            "empty hidden layers cannot have output neurons".to_string(),
         ));
     }
-    if !layers[0].neurons.is_empty() && layers[1].neurons.is_empty() {
+    if any_hidden && output_neurons == 0 {
         return Err(ManasError::InvalidNetwork(
-            "non-empty hidden layer requires output neurons".to_string(),
+            "non-empty hidden layers require output neurons".to_string(),
         ));
+    }
+    for (layer_index, layer) in layers[..output_index].iter().enumerate() {
+        if layer.neurons.is_empty() && any_hidden {
+            return Err(ManasError::InvalidNetwork(format!(
+                "hidden layer {layer_index} is empty in a non-empty network"
+            )));
+        }
     }
 
-    let hidden_dim = layers[0].neurons.len();
     let mut seen_ids = HashSet::new();
 
     for (layer_index, layer) in layers.iter().enumerate() {
         let expected_weights = if layer_index == 0 {
             input_dim
+        } else if layer_index == output_index {
+            hidden_feature_count
         } else {
-            hidden_dim
+            layers[layer_index - 1].neurons.len()
         };
 
         for neuron in &layer.neurons {
@@ -1357,6 +1667,108 @@ mod tests {
             network.grow_neuron(0, 8),
             Err(ManasError::GrowthFailed(_))
         ));
+    }
+
+    #[test]
+    fn layer_growth_should_grow_when_hidden_neurons_are_saturated() {
+        let mut network = Network::new_empty(4);
+        assert!(!network.should_grow_layer());
+
+        network.grow_neuron(0, 4).unwrap();
+        assert!(!network.should_grow_layer());
+
+        network.layers[0].neurons[0].guard_all();
+        assert!(network.should_grow_layer());
+    }
+
+    #[test]
+    fn layer_growth_inserts_hidden_layer_before_output_and_preserves_readout() {
+        let mut network = Network::new_empty(4);
+        let cat_id = network.grow_neuron(0, 4).unwrap();
+        let paris_id = network.grow_neuron(0, 4).unwrap();
+        let cat_input = [1.0, 0.0, 0.0, 0.0];
+        let paris_input = [0.0, 1.0, 0.0, 0.0];
+        let rust_input = [0.0, 0.0, 1.0, 0.0];
+        let cat_target = [0.9, 0.1, 0.0, 0.0];
+        let paris_target = [0.0, 0.9, 0.1, 0.0];
+        let rust_target = [0.0, 0.0, 0.9, 0.1];
+
+        network
+            .bind_hidden_neuron_to_fact(cat_id, &cat_input, &cat_target)
+            .unwrap();
+        network
+            .bind_hidden_neuron_to_fact(paris_id, &paris_input, &paris_target)
+            .unwrap();
+        let cat_before = network.readout_from_best_hidden(&cat_input).unwrap().output;
+        let paris_before = network
+            .readout_from_best_hidden(&paris_input)
+            .unwrap()
+            .output;
+
+        let new_layer_id = network.grow_layer(2, 1).unwrap();
+        let rust_id = network
+            .layers
+            .iter()
+            .find(|layer| layer.id == new_layer_id)
+            .and_then(|layer| layer.neurons.last())
+            .map(|neuron| neuron.id)
+            .unwrap();
+        network
+            .bind_hidden_neuron_to_fact(rust_id, &rust_input, &rust_target)
+            .unwrap();
+
+        assert_eq!(network.layer_count(), 3);
+        assert_eq!(network.hidden_dim, 3);
+        assert_eq!(network.layers[2].neurons.len(), 4);
+        assert!(
+            network.layers[2]
+                .neurons
+                .iter()
+                .all(|neuron| neuron.weights.len() == 3)
+        );
+        assert_vectors_close(
+            &network.readout_from_best_hidden(&cat_input).unwrap().output,
+            &cat_before,
+        );
+        assert_vectors_close(
+            &network
+                .readout_from_best_hidden(&paris_input)
+                .unwrap()
+                .output,
+            &paris_before,
+        );
+        assert_vectors_close(
+            &network
+                .readout_from_best_hidden(&rust_input)
+                .unwrap()
+                .output,
+            &rust_target,
+        );
+        assert_eq!(
+            network
+                .readout_from_best_hidden(&rust_input)
+                .unwrap()
+                .layer_index,
+            1
+        );
+    }
+
+    #[test]
+    fn layer_growth_respects_max_layers() {
+        let mut network = Network::new_empty(4);
+        network.grow_neuron(0, 4).unwrap();
+
+        while network.layer_count() < MAX_LAYERS {
+            let input_size = network.layers[network.layer_count() - 2].neurons.len();
+            network.grow_layer(input_size, 1).unwrap();
+        }
+
+        let input_size = network.layers[network.layer_count() - 2].neurons.len();
+        assert!(matches!(
+            network.grow_layer(input_size, 1),
+            Err(ManasError::GrowthFailed(_))
+        ));
+        assert_eq!(network.layer_count(), MAX_LAYERS);
     }
 
     #[test]
