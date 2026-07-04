@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::backprop::{compute_gradients, cosine, mse_loss};
-use crate::decoder::{DecodedAnswer, decode_answer};
+use crate::decoder::{DecodeConfig, DecodedAnswer, decode_answer_with_config};
 use crate::encoder::Encoder;
 use crate::freshness::{FreshnessCategory, FreshnessWarning, detect_freshness, staleness_warning};
 use crate::importance;
@@ -37,6 +37,21 @@ pub struct ProtectionReport {
 pub enum AnswerSource {
     NeuralWeights,
     NotEnough,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueryStyle {
+    Compact,
+    Expanded,
+}
+
+impl QueryStyle {
+    fn decode_config(self) -> DecodeConfig {
+        match self {
+            Self::Compact => DecodeConfig::compact(),
+            Self::Expanded => DecodeConfig::expanded(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -433,12 +448,21 @@ impl Trainer {
     }
 
     pub fn query(&self, network: &Network, question: &str) -> Result<QueryResult, ManasError> {
+        self.query_with_style(network, question, QueryStyle::Compact)
+    }
+
+    pub fn query_with_style(
+        &self,
+        network: &Network,
+        question: &str,
+        style: QueryStyle,
+    ) -> Result<QueryResult, ManasError> {
         if network.neuron_count() == 0 {
             return Ok(not_enough());
         }
 
         if network.keyed_hidden_memory() {
-            return Ok(self.query_bound_memory(network, question));
+            return Ok(self.query_bound_memory(network, question, style));
         }
 
         let input = self.encoder.encode_deterministic(question);
@@ -447,24 +471,33 @@ impl Trainer {
         }
 
         let output = network.forward(&input);
-        Ok(match decode_answer(&output, &self.encoder, question) {
-            Some(decoded) => {
-                let freshness_warning = best_hidden_neuron(network, &input)
-                    .and_then(|neuron| staleness_warning(neuron, unix_now_secs()));
+        Ok(
+            match decode_answer_with_config(&output, &self.encoder, question, style.decode_config())
+            {
+                Some(decoded) => {
+                    let freshness_warning = best_hidden_neuron(network, &input)
+                        .and_then(|neuron| staleness_warning(neuron, unix_now_secs()));
 
-                QueryResult {
-                    answer: decoded.answer,
-                    confidence: decoded.confidence,
-                    answered_from: AnswerSource::NeuralWeights,
-                    freshness_warning,
+                    QueryResult {
+                        answer: decoded.answer,
+                        confidence: decoded.confidence,
+                        answered_from: AnswerSource::NeuralWeights,
+                        freshness_warning,
+                    }
                 }
-            }
-            None => not_enough(),
-        })
+                None => not_enough(),
+            },
+        )
     }
 
-    fn query_bound_memory(&self, network: &Network, question: &str) -> QueryResult {
+    fn query_bound_memory(
+        &self,
+        network: &Network,
+        question: &str,
+        style: QueryStyle,
+    ) -> QueryResult {
         let mut best: Option<BoundQueryCandidate> = None;
+        let decode_config = style.decode_config();
 
         for variant in query_variants(question) {
             let input = self.encoder.encode_deterministic(&variant);
@@ -477,7 +510,12 @@ impl Trainer {
                     continue;
                 }
 
-                let Some(decoded) = decode_answer(&readout.output, &self.encoder, question) else {
+                let Some(decoded) = decode_answer_with_config(
+                    &readout.output,
+                    &self.encoder,
+                    question,
+                    decode_config,
+                ) else {
                     continue;
                 };
                 let score = decoded.confidence * readout.activation.clamp(0.0, 1.0);

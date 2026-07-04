@@ -50,7 +50,7 @@ body:
     id: version
     attributes:
       label: Manas version / commit
-      placeholder: e.g. main, v0.1.0, or commit SHA
+      placeholder: e.g. main, v2.0.0, or commit SHA
 
   - type: textarea
     id: environment

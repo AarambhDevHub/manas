@@ -4,11 +4,35 @@ use crate::backprop::cosine;
 use crate::encoder::{ANSWER_CODEC_MARKER, ANSWER_COUNT_SCALE, ANSWER_ID_SCALE, Encoder};
 
 pub const MIN_QUERY_CONFIDENCE: f32 = 0.25;
-const MAX_ANSWER_WORDS: usize = 6;
-const MAX_LEGACY_EMBEDDING_WORDS: usize = 1;
+const COMPACT_MAX_ANSWER_WORDS: usize = 6;
+const EXPANDED_MAX_ANSWER_WORDS: usize = 24;
+const COMPACT_MAX_LEGACY_EMBEDDING_WORDS: usize = 1;
+const EXPANDED_MAX_LEGACY_EMBEDDING_WORDS: usize = 4;
 const MIN_PACKED_ACTIVATION: f32 = 0.20;
 const PACKED_ROUND_TOLERANCE: f32 = 0.35;
 const MIN_EMBEDDING_RATIO: f32 = 0.72;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecodeConfig {
+    pub max_answer_words: usize,
+    pub max_legacy_embedding_words: usize,
+}
+
+impl DecodeConfig {
+    pub const fn compact() -> Self {
+        Self {
+            max_answer_words: COMPACT_MAX_ANSWER_WORDS,
+            max_legacy_embedding_words: COMPACT_MAX_LEGACY_EMBEDDING_WORDS,
+        }
+    }
+
+    pub const fn expanded() -> Self {
+        Self {
+            max_answer_words: EXPANDED_MAX_ANSWER_WORDS,
+            max_legacy_embedding_words: EXPANDED_MAX_LEGACY_EMBEDDING_WORDS,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedAnswer {
@@ -17,18 +41,28 @@ pub struct DecodedAnswer {
 }
 
 pub fn decode_answer(output: &[f32], encoder: &Encoder, question: &str) -> Option<DecodedAnswer> {
+    decode_answer_with_config(output, encoder, question, DecodeConfig::compact())
+}
+
+pub fn decode_answer_with_config(
+    output: &[f32],
+    encoder: &Encoder,
+    question: &str,
+    config: DecodeConfig,
+) -> Option<DecodedAnswer> {
     if output.iter().all(|value| value.abs() <= f32::EPSILON) {
         return None;
     }
 
-    decode_packed_answer(output, encoder, question)
-        .or_else(|| decode_embedding_answer(output, encoder, question))
+    decode_packed_answer(output, encoder, question, config)
+        .or_else(|| decode_embedding_answer(output, encoder, question, config))
 }
 
 fn decode_packed_answer(
     output: &[f32],
     encoder: &Encoder,
     question: &str,
+    config: DecodeConfig,
 ) -> Option<DecodedAnswer> {
     if output.len() < 3 || output[0] >= ANSWER_CODEC_MARKER * MIN_PACKED_ACTIVATION {
         return None;
@@ -41,9 +75,10 @@ fn decode_packed_answer(
 
     let count_value = output[1] / activation * ANSWER_COUNT_SCALE;
     let count = rounded_usize(count_value)?;
-    if count == 0 || count > output.len().saturating_sub(2) || count > MAX_ANSWER_WORDS {
+    if count == 0 || count > output.len().saturating_sub(2) || config.max_answer_words == 0 {
         return None;
     }
+    let slot_count = count.min(config.max_answer_words);
 
     let id_to_word = encoder
         .known_word_ids()
@@ -53,8 +88,8 @@ fn decode_packed_answer(
         .into_iter()
         .collect::<HashSet<_>>();
 
-    let mut words = Vec::with_capacity(count);
-    for slot in 0..count {
+    let mut words = Vec::with_capacity(slot_count);
+    for slot in 0..slot_count {
         let id_value = output[slot + 2] / activation * ANSWER_ID_SCALE;
         let encoded_id = rounded_u32(id_value)?;
         let word_id = encoded_id.checked_sub(1)?;
@@ -78,7 +113,12 @@ fn decode_embedding_answer(
     output: &[f32],
     encoder: &Encoder,
     question: &str,
+    config: DecodeConfig,
 ) -> Option<DecodedAnswer> {
+    if config.max_legacy_embedding_words == 0 {
+        return None;
+    }
+
     let query_words = normalized_words(question)
         .into_iter()
         .collect::<HashSet<_>>();
@@ -113,7 +153,7 @@ fn decode_embedding_answer(
     let words = candidates
         .iter()
         .filter(|(_, score)| *score >= threshold)
-        .take(MAX_LEGACY_EMBEDDING_WORDS)
+        .take(config.max_legacy_embedding_words)
         .map(|(word, _)| word.clone())
         .collect::<Vec<_>>();
 
@@ -218,5 +258,27 @@ mod tests {
 
         assert_eq!(decoded.answer, "small animal fur");
         assert_eq!(decoded.confidence, 1.0);
+    }
+
+    #[test]
+    fn compact_decoding_truncates_long_packed_answers() {
+        let mut encoder = Encoder::with_dim(32);
+        let output = encoder.encode_answer("one two three four five six seven eight");
+
+        let decoded = decode_answer(&output, &encoder, "What numbers?").unwrap();
+
+        assert_eq!(decoded.answer, "one two three four five six");
+    }
+
+    #[test]
+    fn expanded_decoding_keeps_more_packed_words() {
+        let mut encoder = Encoder::with_dim(32);
+        let output = encoder.encode_answer("one two three four five six seven eight");
+
+        let decoded =
+            decode_answer_with_config(&output, &encoder, "What numbers?", DecodeConfig::expanded())
+                .unwrap();
+
+        assert_eq!(decoded.answer, "one two three four five six seven eight");
     }
 }

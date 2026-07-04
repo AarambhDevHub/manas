@@ -12,3 +12,4 @@ harness = false
 manas-core = { workspace = true }
 manas-store = { workspace = true }
 manas-learn = { workspace = true }
+manas-language = { workspace = true }

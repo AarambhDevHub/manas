@@ -108,7 +108,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "manas-agent"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "manas-core",
  "manas-learn",
@@ -118,48 +118,58 @@ dependencies = [
 
 [[package]]
 name = "manas-benches"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "manas-core",
+ "manas-language",
  "manas-learn",
  "manas-store",
 ]
 
 [[package]]
 name = "manas-cli"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "manas-agent",
  "manas-core",
  "manas-ingest",
+ "manas-language",
  "manas-learn",
  "manas-store",
 ]
 
 [[package]]
 name = "manas-core"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "rand",
 ]
 
 [[package]]
 name = "manas-ingest"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "manas-core",
 ]
 
 [[package]]
+name = "manas-language"
+version = "2.0.0"
+dependencies = [
+ "manas-core",
+ "manas-learn",
+]
+
+[[package]]
 name = "manas-learn"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "manas-core",
 ]
 
 [[package]]
 name = "manas-store"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "manas-core",
  "manas-learn",

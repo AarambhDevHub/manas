@@ -9,6 +9,14 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Next
+
+- Post-v2 release hardening.
+
+---
+
+## [2.0.0] — 2026-07-04
+
 ### Completed
 
 - Stage 0 — Workspace and foundation.
@@ -30,6 +38,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 16 — Benchmarks and test suite.
 - Stage 17 — Layer growth.
 - Stage 18 — Internet refresh agent.
+- Stage 19 — Language generation.
 
 ### Added
 
@@ -108,9 +117,9 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added compression tests proving neuron count reduction, frozen-neuron safety,
   high-importance survival, anti-forgetting after compression, dry-run behavior,
   and brain file-size shrinkage.
-- Added the non-runtime `manas-benches` workspace crate with B1-B8 benchmark
-  coverage for teach, ask, save, load, tokenization, anti-forgetting, memory
-  footprint, and brain file growth.
+- Added the non-runtime `manas-benches` workspace crate with B1-B9 benchmark
+  coverage for teach, ask, generate, save, load, tokenization, anti-forgetting,
+  memory footprint, and brain file growth.
 - Added `BENCHMARKS.md` with generated full-run benchmark results.
 - Added Stage 16 integration coverage for the 22-fact demo, anti-forgetting,
   persistence, growth, protection, compression, freshness, and ingestion.
@@ -134,18 +143,20 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stale protected memories while `manas ask` remains local-only.
 - Added Stage 18 tests for agent planning/parsing, trainer refresh behavior,
   protected stale refresh, v3 persistence, v2 compatibility, and CLI refresh.
-
-### Next
-
-- Stage 19 — Language generation.
+- Added `manas-language` as a local fluent generation crate built on top of
+  associative-memory query results.
+- Added expanded query decoding for generation while keeping default
+  `manas ask` compact and backward-compatible.
+- Added `manas generate <prompt>`, `manas generate --max-words N`, and
+  `manas ask --fluent <question>` for sentence output generated from neural
+  concepts.
+- Added Stage 19 language and CLI tests proving generation still works after
+  historical sidecars are deleted and still reports `neural weights` as source.
+- Added B9 benchmark coverage for single fluent generation.
 
 ---
 
-<!-- Releases will be added here as stages complete -->
-
-<!--
-
-## [0.1.0] — TBD
+## [0.1.0] — Historical Stage 13 milestone
 
 ### Added
 - Associative memory engine — knowledge stored in neural weights directly
@@ -162,11 +173,9 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - All v1 sidecar files (brain.manas.sources, brain.manas.sourceindex,
   brain.manas.seq, brain.manas.transformer, brain.manas.langmeta)
 - Text-file-based answering system from v1
-- manas-language crate (transformer path)
+- v1 transformer-path sidecars
 - manas-agent crate
 - manas-memory crate
-
--->
 
 ---
 

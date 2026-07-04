@@ -9,6 +9,7 @@ use manas_agent::{
 };
 use manas_core::{Activation, Network, ProtectionLevel};
 use manas_ingest::{IngestSource, ingest};
+use manas_language::{GenerationConfig, GenerationResult, LanguageGenerator, MAX_GENERATED_WORDS};
 use manas_learn::{
     AnswerSource, BrainDiagnostics, CompressionConfig, CompressionPlan, CompressionReport,
     DEFAULT_COMPRESSION_THRESHOLD, EncoderVocabEntry, FreshnessWarning, LearnReport,
@@ -44,21 +45,53 @@ where
         return Ok(());
     };
 
+    if matches!(command, "help" | "--help" | "-h") {
+        return match args.get(1).map(String::as_str) {
+            Some("help" | "--help" | "-h") | None => {
+                print_help();
+                Ok(())
+            }
+            Some(command) => print_command_help(command),
+        };
+    }
+
+    if args[1..].iter().any(|arg| is_help_flag(arg)) {
+        return print_command_help(command);
+    }
+
     match command {
         "teach" => teach(brain_path, &args[1..]),
         "ask" => ask(brain_path, &args[1..]),
-        "inspect" => inspect(brain_path),
+        "generate" => generate(brain_path, &args[1..]),
+        "inspect" => {
+            require_no_args("inspect", &args[1..])?;
+            inspect(brain_path)
+        }
         "neurons" => neurons(brain_path, &args[1..]),
         "trace" => trace(brain_path, &args[1..]),
         "forget" => forget(brain_path, &args[1..]),
         "refresh" => refresh(brain_path, &args[1..]),
-        "reset" => reset(brain_path),
-        "help" | "--help" | "-h" => {
-            print_help();
-            Ok(())
+        "reset" => {
+            require_no_args("reset", &args[1..])?;
+            reset(brain_path)
         }
-        other => Err(format!("unknown command '{other}'")),
+        other => Err(format!(
+            "unknown command '{other}'. Run 'manas help' to see commands."
+        )),
     }
+}
+
+fn is_help_flag(arg: &str) -> bool {
+    matches!(arg, "--help" | "-h")
+}
+
+fn require_no_args(command: &str, args: &[String]) -> Result<(), String> {
+    if let Some(value) = args.first() {
+        return Err(format!(
+            "unexpected {command} argument '{value}'. Run 'manas help {command}' for usage."
+        ));
+    }
+    Ok(())
 }
 
 fn teach(brain_path: &Path, args: &[String]) -> Result<(), String> {
@@ -95,32 +128,36 @@ fn teach(brain_path: &Path, args: &[String]) -> Result<(), String> {
 }
 
 fn ask(brain_path: &Path, args: &[String]) -> Result<(), String> {
-    let question = joined_text(args)?;
+    let request = ask_request(args)?;
     let brain = ManasBrain::new(brain_path);
 
     if !brain.exists() {
-        print_answer(
-            "Not enough knowledge yet.",
-            0.0,
-            AnswerSource::NotEnough,
-            None,
-        );
+        if request.fluent {
+            print_generation(&not_enough_generation());
+        } else {
+            print_answer(
+                "Not enough knowledge yet.",
+                0.0,
+                AnswerSource::NotEnough,
+                None,
+            );
+        }
         return Ok(());
     }
 
-    let state = brain.load_state().map_err(|error| error.to_string())?;
-    let mut trainer = Trainer::with_seed(
-        DEFAULT_SEED,
-        state.network.input_dim.max(1),
-        DEFAULT_LEARNING_RATE,
-    );
-    trainer
-        .encoder
-        .import_vocab(&to_encoder_entries(&state.vocab_entries))
-        .map_err(|error| error.to_string())?;
+    let (network, trainer) = load_runtime_from_brain(&brain)?;
+
+    if request.fluent {
+        let generator = LanguageGenerator::default();
+        let result = generator
+            .generate(&trainer, &network, &request.question)
+            .map_err(|error| error.to_string())?;
+        print_generation(&result);
+        return Ok(());
+    }
 
     let result = trainer
-        .query(&state.network, &question)
+        .query(&network, &request.question)
         .map_err(|error| error.to_string())?;
     print_answer(
         &result.answer,
@@ -128,6 +165,26 @@ fn ask(brain_path: &Path, args: &[String]) -> Result<(), String> {
         result.answered_from,
         result.freshness_warning.as_ref(),
     );
+    Ok(())
+}
+
+fn generate(brain_path: &Path, args: &[String]) -> Result<(), String> {
+    let request = generation_request(args)?;
+    let brain = ManasBrain::new(brain_path);
+
+    if !brain.exists() {
+        print_generation(&not_enough_generation());
+        return Ok(());
+    }
+
+    let (network, trainer) = load_runtime_from_brain(&brain)?;
+    let generator = LanguageGenerator::new(GenerationConfig {
+        max_words: request.max_words,
+    });
+    let result = generator
+        .generate(&trainer, &network, &request.prompt)
+        .map_err(|error| error.to_string())?;
+    print_generation(&result);
     Ok(())
 }
 
@@ -443,6 +500,21 @@ fn save_runtime(brain_path: &Path, network: Network, trainer: &Trainer) -> Resul
         .map_err(|error| error.to_string())
 }
 
+fn load_runtime_from_brain(brain: &ManasBrain) -> Result<(Network, Trainer), String> {
+    let state = brain.load_state().map_err(|error| error.to_string())?;
+    let mut trainer = Trainer::with_seed(
+        DEFAULT_SEED,
+        state.network.input_dim.max(1),
+        DEFAULT_LEARNING_RATE,
+    );
+    trainer
+        .encoder
+        .import_vocab(&to_encoder_entries(&state.vocab_entries))
+        .map_err(|error| error.to_string())?;
+
+    Ok((state.network, trainer))
+}
+
 fn print_teach_report(summary: &TeachSummary) {
     println!("Teaching complete");
     println!();
@@ -492,6 +564,53 @@ fn print_answer(
     );
 }
 
+fn print_generation(result: &GenerationResult) {
+    print!("{}", render_generation(result));
+}
+
+fn render_generation(result: &GenerationResult) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(&mut output, "Generated").expect("writing to String should not fail");
+    writeln!(&mut output, "  {}", result.text).expect("writing to String should not fail");
+    writeln!(&mut output).expect("writing to String should not fail");
+    writeln!(&mut output, "Confidence").expect("writing to String should not fail");
+    writeln!(&mut output, "  {:.2}", result.confidence).expect("writing to String should not fail");
+    writeln!(&mut output).expect("writing to String should not fail");
+    writeln!(&mut output, "Generated from").expect("writing to String should not fail");
+    writeln!(
+        &mut output,
+        "  {}",
+        answer_source_label(result.answered_from)
+    )
+    .expect("writing to String should not fail");
+
+    if let Some(warning) = result.freshness_warning {
+        writeln!(&mut output).expect("writing to String should not fail");
+        writeln!(&mut output, "Note").expect("writing to String should not fail");
+        writeln!(
+            &mut output,
+            "  This knowledge may be outdated ({} freshness, learned {} days ago).",
+            warning.category.label(),
+            warning.age_days
+        )
+        .expect("writing to String should not fail");
+    }
+
+    output
+}
+
+fn not_enough_generation() -> GenerationResult {
+    GenerationResult {
+        text: "Not enough knowledge yet.".to_string(),
+        confidence: 0.0,
+        answered_from: AnswerSource::NotEnough,
+        freshness_warning: None,
+        concepts: Vec::new(),
+    }
+}
+
 fn render_answer(
     answer: &str,
     confidence: f32,
@@ -527,16 +646,287 @@ fn render_answer(
 }
 
 fn print_help() {
-    println!("Manas");
+    println!("Manas CLI");
+    println!("Local self-growing AI brain written in Rust.");
     println!();
     println!("Usage:");
-    println!("  manas teach <text|file|folder> [--recursive]");
-    println!("  manas ask <question>");
+    println!("  manas <command> [options]");
+    println!("  manas help [command]");
+    println!("  manas <command> --help");
+    println!();
+    println!("Commands:");
+    println!("  teach      Teach Manas from raw text, a file, or a folder");
+    println!("  ask        Ask a compact question answered from local neural weights");
+    println!("  generate   Generate one fluent sentence from learned concepts");
+    println!("  inspect    Show brain file, network, learning, freshness, source, and layer stats");
+    println!("  neurons    List learned neurons with protection, source, and freshness filters");
+    println!("  trace      Debug how a question maps to variants, activations, and output values");
+    println!("  forget     Compress stale low-importance open neurons safely");
+    println!("  refresh    Refresh stale realtime memories from the internet explicitly");
+    println!("  reset      Delete the brain file and known sidecar files");
+    println!();
+    println!("Global help:");
+    println!("  help       Show this help, or command help when followed by a command");
+    println!("  -h         Show help when used after a command");
+    println!("  --help     Show help when used globally or after a command");
+    println!();
+    println!("Examples:");
+    println!("  manas teach \"A cat is a small domesticated animal with fur.\"");
+    println!("  manas teach ./notes.md");
+    println!("  manas teach ./docs --recursive");
+    println!("  manas ask \"What is a cat?\"");
+    println!("  manas ask --fluent \"What is a cat?\"");
+    println!("  manas generate \"Explain the Eiffel Tower\" --max-words 24");
+    println!("  manas neurons --protection frozen --source internet");
+    println!("  manas trace \"Where is the Eiffel Tower?\" --limit 12");
+    println!();
+    println!("Run 'manas help <command>' for detailed command help.");
+}
+
+fn print_command_help(command: &str) -> Result<(), String> {
+    match command {
+        "teach" => print_teach_help(),
+        "ask" => print_ask_help(),
+        "generate" => print_generate_help(),
+        "inspect" => print_inspect_help(),
+        "neurons" => print_neurons_help(),
+        "trace" => print_trace_help(),
+        "forget" => print_forget_help(),
+        "refresh" => print_refresh_help(),
+        "reset" => print_reset_help(),
+        other => {
+            return Err(format!(
+                "unknown help topic '{other}'. Run 'manas help' to see commands."
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn print_teach_help() {
+    println!("manas teach");
+    println!();
+    println!("Teach Manas new knowledge from raw text, a supported file, or a folder.");
+    println!("The learned association is stored in the local brain file: {DEFAULT_BRAIN_PATH}");
+    println!();
+    println!("Usage:");
+    println!("  manas teach <text>");
+    println!("  manas teach <file>");
+    println!("  manas teach <folder> [--recursive]");
+    println!();
+    println!("Arguments:");
+    println!("  <text>      Raw fact or sentence to teach. Quote multi-word text in your shell.");
+    println!(
+        "  <file>      Path to one supported local file, such as .txt, .md, .rs, .toml, .json, or .csv."
+    );
+    println!("  <folder>    Path to a folder containing supported files.");
+    println!();
+    println!("Flags:");
+    println!("  --recursive  Read supported files inside subfolders when teaching from a folder.");
+    println!("  -h, --help   Show help for this command.");
+    println!();
+    println!("Examples:");
+    println!("  manas teach \"A cat is a small domesticated animal with fur and whiskers.\"");
+    println!("  manas teach ./knowledge.md");
+    println!("  manas teach ./notes --recursive");
+    println!();
+    println!("Notes:");
+    println!("  If the single argument exists as a file or folder, Manas treats it as a path.");
+    println!("  If the path does not exist but looks like a path, Manas returns an error.");
+    println!("  --recursive is valid only when the input is a folder.");
+}
+
+fn print_ask_help() {
+    println!("manas ask");
+    println!();
+    println!("Ask Manas a question using the local brain file only.");
+    println!("By default, this returns a compact neural-weight answer.");
+    println!();
+    println!("Usage:");
+    println!("  manas ask [--fluent] <question>");
+    println!();
+    println!("Arguments:");
+    println!("  <question>  Question to answer from learned local knowledge.");
+    println!();
+    println!("Flags:");
+    println!(
+        "  --fluent    Generate a one-sentence natural-language answer instead of compact retrieval."
+    );
+    println!("  -h, --help  Show help for this command.");
+    println!();
+    println!("Examples:");
+    println!("  manas ask \"What is a cat?\"");
+    println!("  manas ask --fluent \"Where is the Eiffel Tower?\"");
+}
+
+fn print_generate_help() {
+    println!("manas generate");
+    println!();
+    println!("Generate one fluent sentence from learned neural-weight concepts.");
+    println!();
+    println!("Usage:");
+    println!("  manas generate <prompt> [--max-words N]");
+    println!("  manas generate <prompt> [--max-words=N]");
+    println!();
+    println!("Arguments:");
+    println!("  <prompt>       Prompt or question to generate from.");
+    println!();
+    println!("Flags:");
+    println!(
+        "  --max-words N  Maximum generated words. Default: {}. Range: 1 to {MAX_GENERATED_WORDS}.",
+        GenerationConfig::default().max_words
+    );
+    println!("  -h, --help     Show help for this command.");
+    println!();
+    println!("Examples:");
+    println!("  manas generate \"What is a cat?\"");
+    println!("  manas generate \"Explain Rust\" --max-words 20");
+    println!("  manas generate \"Explain Rust\" --max-words=20");
+}
+
+fn print_inspect_help() {
+    println!("manas inspect");
+    println!();
+    println!("Print a full status report for the local Manas brain.");
+    println!();
+    println!("Usage:");
     println!("  manas inspect");
-    println!("  manas neurons [--protection open|guarded|frozen] [--source <text>]");
+    println!();
+    println!("Flags:");
+    println!("  -h, --help  Show help for this command.");
+    println!();
+    println!("Output includes:");
+    println!("  Brain file path, size, format version, timestamps, vocab entries");
+    println!("  Network layers, neurons, dimensions, and protection counts");
+    println!("  Learning totals, freshness totals, source totals, and per-layer stats");
+    println!();
+    println!("Example:");
+    println!("  manas inspect");
+}
+
+fn print_neurons_help() {
+    println!("manas neurons");
+    println!();
+    println!("List learned neurons and optionally filter by protection level or source text.");
+    println!();
+    println!("Usage:");
+    println!("  manas neurons [--protection open|guarded|frozen] [--source TEXT]");
+    println!();
+    println!("Flags:");
+    println!("  --protection VALUE  Show only neurons with this protection level.");
+    println!("                      Values: open, guarded, frozen.");
+    println!("  --source TEXT       Show only neurons whose source label contains TEXT.");
+    println!("  -h, --help          Show help for this command.");
+    println!();
+    println!("Examples:");
+    println!("  manas neurons");
+    println!("  manas neurons --protection frozen");
+    println!("  manas neurons --source ./docs");
+    println!("  manas neurons --protection guarded --source internet");
+}
+
+fn print_trace_help() {
+    println!("manas trace");
+    println!();
+    println!("Debug how Manas answers a question.");
+    println!(
+        "Trace shows query variants, selected variant, top hidden activations, output values, and final answer."
+    );
+    println!();
+    println!("Usage:");
     println!("  manas trace <question> [--limit N]");
+    println!();
+    println!("Arguments:");
+    println!("  <question>  Question to trace through the learned network.");
+    println!();
+    println!("Flags:");
+    println!(
+        "  --limit N   Number of top activations/output values to print. Default: {DEFAULT_TRACE_LIMIT}. Range: 1 to {MAX_TRACE_LIMIT}."
+    );
+    println!("  -h, --help  Show help for this command.");
+    println!();
+    println!("Examples:");
+    println!("  manas trace \"What is a cat?\"");
+    println!("  manas trace \"Where is the Eiffel Tower?\" --limit 12");
+}
+
+fn print_forget_help() {
+    println!("manas forget");
+    println!();
+    println!(
+        "Compress stale, low-importance, open hidden neurons when a safe merge target exists."
+    );
+    println!("Frozen and guarded knowledge is protected from deletion.");
+    println!();
+    println!("Usage:");
     println!("  manas forget [--dry-run] [--threshold N]");
+    println!();
+    println!("Flags:");
+    println!("  --dry-run      Print the compression plan without changing the brain file.");
+    println!(
+        "  --threshold N  Maximum importance score eligible for compression. Default: {:.4}. Range: 0.0 to 1.0.",
+        DEFAULT_COMPRESSION_THRESHOLD
+    );
+    println!("  -h, --help     Show help for this command.");
+    println!();
+    println!("Examples:");
+    println!("  manas forget --dry-run");
+    println!("  manas forget --threshold 0.20");
+    println!("  manas forget --dry-run --threshold 0.15");
+}
+
+fn print_refresh_help() {
+    println!("manas refresh");
+    println!();
+    println!(
+        "Explicitly refresh stale realtime knowledge from the internet and re-teach updated answers."
+    );
+    println!(
+        "Normal 'manas ask' remains local-only; refresh is the command that can use the network."
+    );
+    println!();
+    println!("Usage:");
     println!("  manas refresh [--fast] [--dry-run] [--limit N]");
+    println!();
+    println!("Flags:");
+    println!("  --fast      Also refresh stale Fast knowledge, not only Realtime knowledge.");
+    println!("  --dry-run   Show refresh candidates without fetching or saving updates.");
+    println!(
+        "  --limit N   Maximum refresh candidates to process. Default: {DEFAULT_REFRESH_LIMIT}. Range: 1 to {MAX_REFRESH_LIMIT}."
+    );
+    println!("  -h, --help  Show help for this command.");
+    println!();
+    println!("Examples:");
+    println!("  manas refresh --dry-run");
+    println!("  manas refresh --fast --limit 10");
+    println!("  MANAS_REFRESH_FIXTURE=./refresh.json manas refresh --dry-run");
+    println!();
+    println!("Environment:");
+    println!(
+        "  MANAS_REFRESH_FIXTURE  Optional fixture JSON file used instead of live DuckDuckGo search."
+    );
+}
+
+fn print_reset_help() {
+    println!("manas reset");
+    println!();
+    println!("Delete the local brain file and known sidecar files.");
+    println!();
+    println!("Usage:");
+    println!("  manas reset");
+    println!();
+    println!("Flags:");
+    println!("  -h, --help  Show help for this command.");
+    println!();
+    println!("Files removed:");
+    println!("  {DEFAULT_BRAIN_PATH}");
+    println!("  {DEFAULT_BRAIN_PATH}.sources");
+    println!("  {DEFAULT_BRAIN_PATH}.sourceindex");
+    println!("  {DEFAULT_BRAIN_PATH}.seq");
+    println!("  {DEFAULT_BRAIN_PATH}.transformer");
+    println!("  {DEFAULT_BRAIN_PATH}.langmeta");
+    println!();
+    println!("Example:");
     println!("  manas reset");
 }
 
@@ -880,6 +1270,67 @@ fn trace_request(args: &[String]) -> Result<TraceRequest, String> {
     })
 }
 
+fn ask_request(args: &[String]) -> Result<AskRequest, String> {
+    let mut fluent = false;
+    let mut question_parts = Vec::new();
+
+    for arg in args {
+        match arg.as_str() {
+            "--fluent" => fluent = true,
+            option if option.starts_with("--") => {
+                return Err(format!("unknown ask option '{option}'"));
+            }
+            value => question_parts.push(value.to_string()),
+        }
+    }
+
+    Ok(AskRequest {
+        fluent,
+        question: joined_text(&question_parts)?,
+    })
+}
+
+fn generation_request(args: &[String]) -> Result<GenerationRequest, String> {
+    let mut max_words = GenerationConfig::default().max_words;
+    let mut prompt_parts = Vec::new();
+    let mut index = 0;
+
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--max-words" {
+            index += 1;
+            let Some(value) = args.get(index) else {
+                return Err("--max-words requires a value".to_string());
+            };
+            max_words = parse_max_words(value)?;
+        } else if let Some(value) = arg.strip_prefix("--max-words=") {
+            max_words = parse_max_words(value)?;
+        } else if arg.starts_with("--") {
+            return Err(format!("unknown generate option '{arg}'"));
+        } else {
+            prompt_parts.push(arg.to_string());
+        }
+        index += 1;
+    }
+
+    Ok(GenerationRequest {
+        prompt: joined_text(&prompt_parts)?,
+        max_words,
+    })
+}
+
+fn parse_max_words(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| format!("invalid --max-words value '{value}'"))?;
+    if parsed == 0 || parsed > MAX_GENERATED_WORDS {
+        return Err(format!(
+            "--max-words must be between 1 and {MAX_GENERATED_WORDS}"
+        ));
+    }
+    Ok(parsed)
+}
+
 struct ForgetRequest {
     dry_run: bool,
     threshold: f32,
@@ -1085,6 +1536,18 @@ enum TeachMode {
     Text,
     File,
     Folder,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AskRequest {
+    fluent: bool,
+    question: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GenerationRequest {
+    prompt: String,
+    max_words: usize,
 }
 
 impl TeachMode {
