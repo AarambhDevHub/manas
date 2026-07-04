@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use manas_agent::{
+    DuckDuckGoClient, FixtureSearchClient, RefreshConfig, RefreshReport, refresh_network,
+};
 use manas_core::{Activation, Network, ProtectionLevel};
 use manas_ingest::{IngestSource, ingest};
 use manas_learn::{
@@ -20,6 +23,8 @@ const DEFAULT_EMBED_DIM: usize = 32;
 const DEFAULT_SEED: u64 = 42;
 const DEFAULT_TRACE_LIMIT: usize = 8;
 const MAX_TRACE_LIMIT: usize = 100;
+const DEFAULT_REFRESH_LIMIT: usize = 25;
+const MAX_REFRESH_LIMIT: usize = 100;
 
 fn main() {
     if let Err(error) = run_cli(env::args().skip(1), Path::new(DEFAULT_BRAIN_PATH)) {
@@ -46,6 +51,7 @@ where
         "neurons" => neurons(brain_path, &args[1..]),
         "trace" => trace(brain_path, &args[1..]),
         "forget" => forget(brain_path, &args[1..]),
+        "refresh" => refresh(brain_path, &args[1..]),
         "reset" => reset(brain_path),
         "help" | "--help" | "-h" => {
             print_help();
@@ -232,6 +238,10 @@ fn inspect(brain_path: &Path) -> Result<(), String> {
         diagnostics.sources.local_file_neurons
     );
     println!(
+        "  internet neurons      : {}",
+        diagnostics.sources.internet_neurons
+    );
+    println!(
         "  unknown neurons       : {}",
         diagnostics.sources.unknown_neurons
     );
@@ -352,6 +362,46 @@ fn forget(brain_path: &Path, args: &[String]) -> Result<(), String> {
         &report.plan,
         Some(&report),
     );
+    Ok(())
+}
+
+fn refresh(brain_path: &Path, args: &[String]) -> Result<(), String> {
+    let request = refresh_request(args)?;
+    let config = request.config();
+    let brain = ManasBrain::new(brain_path);
+
+    if !brain.exists() {
+        print_refresh_report(&config, &RefreshReport::default(), false);
+        return Ok(());
+    }
+
+    let mut state = brain.load_state().map_err(|error| error.to_string())?;
+    let mut trainer = Trainer::with_seed(
+        DEFAULT_SEED,
+        state.network.input_dim.max(1),
+        DEFAULT_LEARNING_RATE,
+    );
+    trainer
+        .encoder
+        .import_vocab(&to_encoder_entries(&state.vocab_entries))
+        .map_err(|error| error.to_string())?;
+
+    let now_secs = unix_now_secs();
+    let report = if let Ok(path) = env::var("MANAS_REFRESH_FIXTURE") {
+        let client = FixtureSearchClient::from_file(path).map_err(|error| error.to_string())?;
+        refresh_network(&mut state.network, &mut trainer, &client, &config, now_secs)
+    } else {
+        let client = DuckDuckGoClient;
+        refresh_network(&mut state.network, &mut trainer, &client, &config, now_secs)
+    }
+    .map_err(|error| error.to_string())?;
+
+    let saved = report.refreshed > 0 && !config.dry_run;
+    if saved {
+        save_runtime(brain_path, state.network, &trainer)?;
+    }
+
+    print_refresh_report(&config, &report, saved);
     Ok(())
 }
 
@@ -486,7 +536,46 @@ fn print_help() {
     println!("  manas neurons [--protection open|guarded|frozen] [--source <text>]");
     println!("  manas trace <question> [--limit N]");
     println!("  manas forget [--dry-run] [--threshold N]");
+    println!("  manas refresh [--fast] [--dry-run] [--limit N]");
     println!("  manas reset");
+}
+
+fn print_refresh_report(config: &RefreshConfig, report: &RefreshReport, saved: bool) {
+    println!("Refresh");
+    println!("  dry run               : {}", yes_no(config.dry_run));
+    println!(
+        "  include realtime      : {}",
+        yes_no(config.include_realtime)
+    );
+    println!("  include fast          : {}", yes_no(config.include_fast));
+    println!("  limit                 : {}", config.limit);
+    println!("  candidates            : {}", report.candidates);
+    println!("  fetched               : {}", report.fetched);
+    println!("  refreshed             : {}", report.refreshed);
+    println!("  skipped               : {}", report.skipped);
+    println!("  failed                : {}", report.failed);
+    println!("  neurons grown         : {}", report.neurons_grown);
+    println!("  layers grown          : {}", report.layers_grown);
+    println!("  neurons promoted      : {}", report.neurons_promoted);
+    println!("  neurons frozen        : {}", report.neurons_frozen);
+    println!("  brain saved           : {}", yes_no(saved));
+
+    if report.candidates_list.is_empty() {
+        return;
+    }
+
+    println!();
+    println!("Candidates");
+    println!("  {:<6} {:<10} {:>8} query", "id", "freshness", "age");
+    for candidate in &report.candidates_list {
+        println!(
+            "  {:<6} {:<10} {:>8} {}",
+            candidate.neuron_id,
+            candidate.freshness.label().to_ascii_lowercase(),
+            candidate.age_days,
+            candidate.query
+        );
+    }
 }
 
 fn print_forget_report(
@@ -592,6 +681,7 @@ fn print_empty_inspect(brain_path: &Path) {
     println!("Sources");
     println!("  raw text neurons      : 0");
     println!("  local file neurons    : 0");
+    println!("  internet neurons      : 0");
     println!("  unknown neurons       : 0");
     println!();
     println!("Layers");
@@ -824,6 +914,60 @@ fn forget_request(args: &[String]) -> Result<ForgetRequest, String> {
     }
 
     Ok(ForgetRequest { dry_run, threshold })
+}
+
+struct RefreshRequest {
+    include_fast: bool,
+    dry_run: bool,
+    limit: usize,
+}
+
+impl RefreshRequest {
+    fn config(&self) -> RefreshConfig {
+        RefreshConfig {
+            include_fast: self.include_fast,
+            include_realtime: true,
+            dry_run: self.dry_run,
+            limit: self.limit,
+        }
+    }
+}
+
+fn refresh_request(args: &[String]) -> Result<RefreshRequest, String> {
+    let mut include_fast = false;
+    let mut dry_run = false;
+    let mut limit = DEFAULT_REFRESH_LIMIT;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--fast" => include_fast = true,
+            "--dry-run" => dry_run = true,
+            "--limit" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--limit requires a value".to_string())?;
+                limit = value
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid --limit value '{value}'"))?;
+                if !(1..=MAX_REFRESH_LIMIT).contains(&limit) {
+                    return Err(format!("--limit must be between 1 and {MAX_REFRESH_LIMIT}"));
+                }
+            }
+            option if option.starts_with("--") => {
+                return Err(format!("unknown refresh option '{option}'"));
+            }
+            value => return Err(format!("unexpected refresh argument '{value}'")),
+        }
+        index += 1;
+    }
+
+    Ok(RefreshRequest {
+        include_fast,
+        dry_run,
+        limit,
+    })
 }
 
 fn parse_protection(value: &str) -> Result<ProtectionLevel, String> {

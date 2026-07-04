@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use manas_core::{Activation, Layer, ManasError, Network, Neuron, ProtectionLevel, Source};
 
 const MAGIC: &[u8; 4] = b"MANS";
-const FORMAT_VERSION: u8 = 2;
+const FORMAT_VERSION: u8 = 3;
+const LEGACY_FORMAT_VERSION: u8 = 2;
 const CRC_SIZE: usize = 4;
 const CRC32_POLYNOMIAL: u32 = 0xEDB8_8320;
 
@@ -169,7 +170,7 @@ fn decode_state(bytes: &[u8]) -> Result<BrainState, ManasError> {
     let mut reader = Reader::new(content);
     reader.expect_bytes(MAGIC)?;
     let version = reader.read_u8()?;
-    if version != FORMAT_VERSION {
+    if version != FORMAT_VERSION && version != LEGACY_FORMAT_VERSION {
         return corrupt(format!("unsupported format version {version}"));
     }
 
@@ -182,7 +183,7 @@ fn decode_state(bytes: &[u8]) -> Result<BrainState, ManasError> {
     let vocab_size = reader.read_u32()?;
     let vocab_entries = read_vocab(&mut reader, vocab_size, input_dim)?;
 
-    let layers = read_layers(&mut reader, expected_layer_count)?;
+    let layers = read_layers(&mut reader, expected_layer_count, version)?;
     reader.finish()?;
 
     let network = Network::from_persisted_layers(created_at, version, input_dim, layers)
@@ -329,6 +330,9 @@ fn write_neuron(bytes: &mut Vec<u8>, neuron: &Neuron) -> Result<(), ManasError> 
     write_u64(bytes, neuron.activation_count);
     write_source(bytes, &neuron.source)?;
     write_u8(bytes, neuron.freshness_category);
+    write_string_u32(bytes, &neuron.memory_input, "memory input length")?;
+    write_string_u32(bytes, &neuron.memory_target, "memory target length")?;
+    write_u64(bytes, neuron.refreshed_at);
     Ok(())
 }
 
@@ -344,6 +348,12 @@ fn write_source(bytes: &mut Vec<u8>, source: &Source) -> Result<(), ManasError> 
             write_u16(bytes, usize_to_u16(path_bytes.len(), "source path length")?);
             bytes.extend_from_slice(path_bytes);
         }
+        Source::Internet { url } => {
+            write_u8(bytes, 3);
+            let url_bytes = url.as_bytes();
+            write_u16(bytes, usize_to_u16(url_bytes.len(), "source URL length")?);
+            bytes.extend_from_slice(url_bytes);
+        }
         Source::Unknown => {
             write_u8(bytes, 2);
             write_u16(bytes, 0);
@@ -352,7 +362,11 @@ fn write_source(bytes: &mut Vec<u8>, source: &Source) -> Result<(), ManasError> 
     Ok(())
 }
 
-fn read_layers(reader: &mut Reader<'_>, expected_count: u32) -> Result<Vec<Layer>, ManasError> {
+fn read_layers(
+    reader: &mut Reader<'_>,
+    expected_count: u32,
+    version: u8,
+) -> Result<Vec<Layer>, ManasError> {
     let layer_count = reader.read_u32()?;
     if layer_count != expected_count {
         return corrupt(format!(
@@ -367,7 +381,7 @@ fn read_layers(reader: &mut Reader<'_>, expected_count: u32) -> Result<Vec<Layer
         let neuron_count = reader.read_u32()?;
         let mut neurons = Vec::with_capacity(u32_to_usize(neuron_count, "neuron count")?);
         for _ in 0..neuron_count {
-            neurons.push(read_neuron(reader)?);
+            neurons.push(read_neuron(reader, version)?);
         }
         layers.push(Layer {
             id,
@@ -379,7 +393,7 @@ fn read_layers(reader: &mut Reader<'_>, expected_count: u32) -> Result<Vec<Layer
     Ok(layers)
 }
 
-fn read_neuron(reader: &mut Reader<'_>) -> Result<Neuron, ManasError> {
+fn read_neuron(reader: &mut Reader<'_>, version: u8) -> Result<Neuron, ManasError> {
     let id = reader.read_u64()?;
     let weight_count = u32_to_usize(reader.read_u32()?, "weight count")?;
     let mut weights = Vec::with_capacity(weight_count);
@@ -402,6 +416,15 @@ fn read_neuron(reader: &mut Reader<'_>) -> Result<Neuron, ManasError> {
     let activation_count = reader.read_u64()?;
     let source = read_source(reader)?;
     let freshness_category = reader.read_u8()?;
+    let (memory_input, memory_target, refreshed_at) = if version >= FORMAT_VERSION {
+        (
+            reader.read_string_u32("memory input")?,
+            reader.read_string_u32("memory target")?,
+            reader.read_u64()?,
+        )
+    } else {
+        (String::new(), String::new(), 0)
+    };
 
     Ok(Neuron {
         id,
@@ -417,6 +440,9 @@ fn read_neuron(reader: &mut Reader<'_>) -> Result<Neuron, ManasError> {
         activation_count,
         source,
         freshness_category,
+        memory_input,
+        memory_target,
+        refreshed_at,
     })
 }
 
@@ -432,6 +458,7 @@ fn read_source(reader: &mut Reader<'_>) -> Result<Source, ManasError> {
         0 if text.is_empty() => Ok(Source::RawText),
         1 => Ok(Source::LocalFile { path: text }),
         2 if text.is_empty() => Ok(Source::Unknown),
+        3 => Ok(Source::Internet { url: text }),
         0 => corrupt("raw text source cannot contain source bytes"),
         2 => corrupt("unknown source cannot contain source bytes"),
         _ => corrupt(format!("invalid source tag {tag}")),
@@ -582,6 +609,12 @@ fn write_f32(bytes: &mut Vec<u8>, value: f32) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+fn write_string_u32(bytes: &mut Vec<u8>, value: &str, field: &str) -> Result<(), ManasError> {
+    write_u32(bytes, usize_to_u32(value.len(), field)?);
+    bytes.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
 fn read_u32_at(bytes: &[u8], offset: usize) -> Result<u32, ManasError> {
     let chunk = bytes
         .get(offset..offset + 4)
@@ -687,6 +720,14 @@ impl<'a> Reader<'a> {
     fn read_f32(&mut self) -> Result<f32, ManasError> {
         let bytes = self.read_bytes(4)?;
         Ok(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+    }
+
+    fn read_string_u32(&mut self, field: &str) -> Result<String, ManasError> {
+        let len = u32_to_usize(self.read_u32()?, field)?;
+        let bytes = self.read_bytes(len)?;
+        std::str::from_utf8(bytes)
+            .map(|text| text.to_string())
+            .map_err(|_| corrupt_error(format!("{field} is not valid UTF-8")))
     }
 
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8], ManasError> {

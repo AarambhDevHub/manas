@@ -29,6 +29,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 15 — Compression and forget command.
 - Stage 16 — Benchmarks and test suite.
 - Stage 17 — Layer growth.
+- Stage 18 — Internet refresh agent.
 
 ### Added
 
@@ -123,10 +124,20 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flattened hidden-activation readout.
 - Added Stage 17 tests for layer growth, max-layer bounds, deep gradients,
   trainer-triggered layer insertion, deep persistence, and CLI inspect/query.
+- Added `manas-agent` as an isolated refresh crate with DuckDuckGo fetching,
+  fixture-backed search, refresh planning, JSON parsing, and refresh reports.
+- Added `manas refresh`, `manas refresh --fast`, `manas refresh --dry-run`, and
+  `manas refresh --limit N` for explicit stale-memory refresh.
+- Added refresh metadata to neurons, `.manas` format v3 persistence, and v2
+  load compatibility for older brain files.
+- Updated trainer query selection so fresh refreshed duplicates can supersede
+  stale protected memories while `manas ask` remains local-only.
+- Added Stage 18 tests for agent planning/parsing, trainer refresh behavior,
+  protected stale refresh, v3 persistence, v2 compatibility, and CLI refresh.
 
 ### Next
 
-- Stage 18 — Internet agent.
+- Stage 19 — Language generation.
 
 ---
 

@@ -28,7 +28,8 @@
     - [manas-store](#102-manas-store)
     - [manas-learn](#103-manas-learn)
     - [manas-ingest](#104-manas-ingest)
-    - [manas-cli](#105-manas-cli)
+    - [manas-agent](#105-manas-agent)
+    - [manas-cli](#106-manas-cli)
 11. [The .manas Binary Format](#11-the-manas-binary-format)
 12. [Data Flow — Full Pipeline](#12-data-flow--full-pipeline)
 13. [Neuron Lifecycle](#13-neuron-lifecycle)
@@ -454,6 +455,11 @@ manas/
 │           ├── toml.rs
 │           └── csv.rs
 │
+├── manas-agent/            ← EXPLICIT INTERNET REFRESH
+│   ├── Cargo.toml          ← deps: manas-core, manas-learn, ureq, serde_json
+│   └── src/
+│       └── lib.rs          ← DuckDuckGo client, fixtures, refresh planner
+│
 ├── manas-cli/              ← USER INTERFACE
     ├── Cargo.toml          ← deps: all crates above
     └── src/
@@ -464,15 +470,15 @@ manas/
         └── bench.rs        ← B1-B8 benchmark harness, BENCHMARKS.md generator
 ```
 
-**Runtime crates: 5** (v1 had 9 — simpler is better)
+**Runtime crates: 6** (v1 had 9 — simpler is better)
 
 **Tooling crates: 1** (`manas-benches`, not part of the runtime path)
 
 **No `manas-language` crate** — the transformer path from v1 is removed.
 Language generation is a future milestone, not the foundation.
 
-**No `manas-agent` crate** — internet search is a future milestone.
-The brain must prove it can store knowledge in weights before fetching more.
+**`manas-agent` is refresh-only** — it powers explicit `manas refresh`.
+It is not used by `manas ask`, which remains neural-weight retrieval only.
 
 **No `manas-memory` crate** — importance scoring and protection now live
 directly inside `manas-core` and `manas-learn` where they belong.
@@ -518,6 +524,7 @@ pub enum ProtectionLevel {
 pub enum Source {
     RawText,
     LocalFile { path: String },
+    Internet { url: String },
     Unknown,
 }
 
@@ -533,6 +540,9 @@ pub struct Neuron {
     pub activation_count: u64,
     pub source: Source,
     pub freshness_category: u8,  // 0=timeless 1=slow 2=fast 3=realtime
+    pub memory_input: String,    // refresh subject; not used by ask
+    pub memory_target: String,   // refresh target; not used by ask
+    pub refreshed_at: u64,       // unix timestamp of explicit refresh
 }
 ```
 
@@ -879,7 +889,18 @@ pub fn normalize(text: &str) -> String { ... }
 
 ---
 
-### 10.5 `manas-cli`
+### 10.5 `manas-agent`
+
+Explicit internet refresh. This crate is the only runtime crate with HTTP and
+JSON dependencies.
+
+`manas-agent` scans stale refreshable hidden memories, builds deduped
+DuckDuckGo queries, parses Instant Answer JSON, and re-teaches updated facts
+through `manas-learn`. It does not answer questions directly.
+
+---
+
+### 10.6 `manas-cli`
 
 User-facing commands. Thin layer over the learning engine.
 **All business logic lives in the crates above. The CLI only routes and formats.**
@@ -897,6 +918,8 @@ manas inspect             Show brain, network, learning, freshness, source, laye
 manas neurons             List/filter neurons with importance, protection, source
 manas trace "<QUESTION>"  Trace query variants, activations, and output values
 manas forget [--dry-run]  Compress stale low-importance mergeable neurons
+manas refresh [--fast] [--dry-run] [--limit N]
+                          Explicitly refresh stale internet-sensitive memories
 manas reset               Delete the brain and start fresh
 ```
 
@@ -959,7 +982,7 @@ In v1, the answering came from sidecar files. In v2, the network answers directl
 Offset  Size    Field
 ──────  ──────  ─────────────────────────────
 0       4       Magic bytes: 0x4D 0x41 0x4E 0x53  ("MANS")
-4       1       Format version: 2
+4       1       Format version: 3
 5       8       Created at (unix timestamp, u64 LE)
 13      8       Last modified (unix timestamp, u64 LE)
 21      8       Total neurons (u64 LE)
@@ -1001,10 +1024,15 @@ for each layer:
     [born_at: u64 LE]
     [last_activated: u64 LE]
     [activation_count: u64 LE]
-    [source_type: u8]   0=RawText 1=LocalFile 2=Unknown
+    [source_type: u8]   0=RawText 1=LocalFile 2=Unknown 3=Internet
     [source_len: u16 LE]
     [source_bytes: source_len bytes UTF-8]
     [freshness_category: u8]
+    [memory_input_len: u32 LE]
+    [memory_input_bytes: memory_input_len bytes UTF-8]
+    [memory_target_len: u32 LE]
+    [memory_target_bytes: memory_target_len bytes UTF-8]
+    [refreshed_at: u64 LE]
 ```
 
 ### Why No Sidecars

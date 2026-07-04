@@ -28,6 +28,7 @@ impl ProtectionLevel {
 pub enum Source {
     RawText,
     LocalFile { path: String },
+    Internet { url: String },
     Unknown,
 }
 
@@ -36,6 +37,7 @@ impl std::fmt::Display for Source {
         match self {
             Source::RawText => write!(formatter, "raw text"),
             Source::LocalFile { path } => write!(formatter, "{path}"),
+            Source::Internet { url } => write!(formatter, "{url}"),
             Source::Unknown => write!(formatter, "unknown"),
         }
     }
@@ -57,6 +59,9 @@ pub struct Neuron {
     pub activation_count: u64,
     pub source: Source,
     pub freshness_category: u8,
+    pub memory_input: String,
+    pub memory_target: String,
+    pub refreshed_at: u64,
 }
 
 impl Neuron {
@@ -85,6 +90,9 @@ impl Neuron {
             activation_count: 0,
             source: Source::Unknown,
             freshness_category: 1,
+            memory_input: String::new(),
+            memory_target: String::new(),
+            refreshed_at: 0,
         }
     }
 

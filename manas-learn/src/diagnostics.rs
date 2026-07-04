@@ -43,6 +43,7 @@ pub struct FreshnessDiagnostics {
 pub struct SourceDiagnostics {
     pub raw_text_neurons: u64,
     pub local_file_neurons: u64,
+    pub internet_neurons: u64,
     pub unknown_neurons: u64,
 }
 
@@ -141,7 +142,9 @@ impl BrainDiagnostics {
         let neurons = neuron_diagnostics(network, now_secs);
         let learned_hidden = neurons
             .iter()
-            .filter(|neuron| neuron.layer_index == 0 && neuron.learned)
+            .filter(|neuron| {
+                neuron.layer_index < network.layer_count().saturating_sub(1) && neuron.learned
+            })
             .collect::<Vec<_>>();
 
         let mut freshness = FreshnessDiagnostics::default();
@@ -160,6 +163,7 @@ impl BrainDiagnostics {
             match &neuron.source {
                 Source::RawText => sources.raw_text_neurons += 1,
                 Source::LocalFile { .. } => sources.local_file_neurons += 1,
+                Source::Internet { .. } => sources.internet_neurons += 1,
                 Source::Unknown => sources.unknown_neurons += 1,
             }
         }
@@ -212,7 +216,7 @@ pub fn neuron_diagnostics(network: &Network, now_secs: u64) -> Vec<NeuronDiagnos
                 .iter()
                 .enumerate()
                 .map(move |(neuron_index, neuron)| {
-                    let learned = layer_index == 0
+                    let learned = layer_index < network.layer_count().saturating_sub(1)
                         && (neuron.activation_count > 0
                             || !matches!(neuron.source, Source::Unknown));
                     let freshness = FreshnessCategory::from(neuron.freshness_category);
@@ -448,6 +452,7 @@ fn source_label(source: &Source) -> String {
     match source {
         Source::RawText => "raw text".to_string(),
         Source::LocalFile { path } => path.clone(),
+        Source::Internet { url } => url.clone(),
         Source::Unknown => "unknown".to_string(),
     }
 }

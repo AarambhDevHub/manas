@@ -160,6 +160,68 @@ fn freshness_category_survives_save_load() {
 }
 
 #[test]
+fn refresh_metadata_and_internet_source_survive_save_load() {
+    let path = temp_path("refresh-metadata");
+    let mut network = Network::new(32, 64, 32);
+    network.layers[0].neurons[0].source = Source::Internet {
+        url: "https://example.test/fresh".to_string(),
+    };
+    network.layers[0].neurons[0].memory_input = "stock price".to_string();
+    network.layers[0].neurons[0].memory_target = "20 today".to_string();
+    network.layers[0].neurons[0].refreshed_at = 1_800_000_000;
+
+    let brain = ManasBrain::new(&path);
+    brain.save(&network).unwrap();
+    let loaded = brain.load().unwrap();
+    let neuron = &loaded.layers[0].neurons[0];
+
+    assert_eq!(
+        neuron.source,
+        Source::Internet {
+            url: "https://example.test/fresh".to_string()
+        }
+    );
+    assert_eq!(neuron.memory_input, "stock price");
+    assert_eq!(neuron.memory_target, "20 today");
+    assert_eq!(neuron.refreshed_at, 1_800_000_000);
+
+    cleanup(&path);
+}
+
+#[test]
+fn legacy_v2_empty_brain_loads_with_empty_refresh_metadata() {
+    let path = temp_path("legacy-v2");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"MANS");
+    bytes.push(2);
+    bytes.extend_from_slice(&1_800_000_000_u64.to_le_bytes());
+    bytes.extend_from_slice(&1_800_000_001_u64.to_le_bytes());
+    bytes.extend_from_slice(&0_u64.to_le_bytes());
+    bytes.extend_from_slice(&2_u32.to_le_bytes());
+    bytes.extend_from_slice(&32_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&2_u32.to_le_bytes());
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.push(2);
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
+    bytes.push(3);
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    let checksum = crc32(&bytes);
+    bytes.extend_from_slice(&checksum.to_le_bytes());
+    fs::write(&path, bytes).unwrap();
+
+    let state = ManasBrain::new(&path).load_state().unwrap();
+
+    assert_eq!(state.metadata.format_version, 2);
+    assert_eq!(state.network.layer_count(), 2);
+    assert_eq!(state.network.neuron_count(), 0);
+
+    cleanup(&path);
+}
+
+#[test]
 fn vocab_entries_survive_save_load() {
     let path = temp_path("vocab");
     let network = Network::new_empty(32);
@@ -183,7 +245,7 @@ fn vocab_entries_survive_save_load() {
 
     assert_eq!(loaded.vocab_entries, vocab_entries);
     assert_eq!(loaded.network.input_dim, 32);
-    assert_eq!(loaded.metadata.format_version, 2);
+    assert_eq!(loaded.metadata.format_version, 3);
     assert_eq!(loaded.metadata.input_dim, 32);
     assert_eq!(loaded.metadata.vocab_size, 2);
     assert_eq!(loaded.metadata.layer_count, 2);
@@ -203,7 +265,7 @@ fn metadata_can_be_loaded_directly() {
     brain.save(&network).unwrap();
     let metadata = brain.metadata().unwrap();
 
-    assert_eq!(metadata.format_version, 2);
+    assert_eq!(metadata.format_version, 3);
     assert_eq!(metadata.input_dim, 32);
     assert_eq!(metadata.layer_count, 2);
     assert_eq!(metadata.total_neurons, 0);

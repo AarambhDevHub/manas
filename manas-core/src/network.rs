@@ -13,7 +13,6 @@ const GRAD_CLIP: f32 = 1.0;
 const DEFAULT_SEED: u64 = 42;
 const RIDGE: f32 = 1.0e-4;
 const ANCHOR_CONSTRAINT_WEIGHT: f32 = 50.0;
-const READOUT_TIE_EPSILON: f32 = 1.0e-3;
 
 /// Borrowed vector pair used by consolidation and readout fitting.
 #[derive(Clone, Copy)]
@@ -521,46 +520,65 @@ impl Network {
     }
 
     pub fn readout_from_best_hidden(&self, input: &[f32]) -> Option<HiddenReadout> {
+        self.readouts_from_hidden(input).into_iter().next()
+    }
+
+    pub fn readouts_from_hidden(&self, input: &[f32]) -> Vec<HiddenReadout> {
         if input.len() != self.input_dim
             || self.hidden_feature_count() == 0
             || self.output_layer().neurons.is_empty()
         {
-            return None;
+            return Vec::new();
         }
 
         let cache = self.forward_with_cache(input);
-        let (global_hidden_index, activation) = best_hidden_activation(&cache.hidden)?;
-
-        if activation <= f32::EPSILON {
-            return None;
-        }
-
-        let output = self
-            .output_layer()
-            .neurons
+        let mut readouts = cache
+            .hidden
             .iter()
-            .map(|output_neuron| {
-                output_neuron
-                    .weights
-                    .get(global_hidden_index)
-                    .copied()
-                    .unwrap_or(0.0)
-            })
-            .map(|weight| weight * activation)
-            .collect::<Vec<_>>();
-        let (layer_index, neuron_index) =
-            self.hidden_location_by_global_index(global_hidden_index)?;
-        let neuron_id = self.layers[layer_index].neurons[neuron_index].id;
+            .copied()
+            .enumerate()
+            .filter_map(|(global_hidden_index, activation)| {
+                if activation <= f32::EPSILON {
+                    return None;
+                }
 
-        Some(HiddenReadout {
-            hidden_index: global_hidden_index,
-            layer_index,
-            neuron_index,
-            global_hidden_index,
-            neuron_id,
-            activation,
-            output,
-        })
+                let (layer_index, neuron_index) =
+                    self.hidden_location_by_global_index(global_hidden_index)?;
+                let output = self
+                    .output_layer()
+                    .neurons
+                    .iter()
+                    .map(|output_neuron| {
+                        output_neuron
+                            .weights
+                            .get(global_hidden_index)
+                            .copied()
+                            .unwrap_or(0.0)
+                    })
+                    .map(|weight| weight * activation)
+                    .collect::<Vec<_>>();
+                let neuron_id = self.layers[layer_index].neurons[neuron_index].id;
+
+                Some(HiddenReadout {
+                    hidden_index: global_hidden_index,
+                    layer_index,
+                    neuron_index,
+                    global_hidden_index,
+                    neuron_id,
+                    activation,
+                    output,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        readouts.sort_by(|left, right| {
+            right
+                .activation
+                .partial_cmp(&left.activation)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left.global_hidden_index.cmp(&right.global_hidden_index))
+        });
+        readouts
     }
 
     pub fn keyed_hidden_memory(&self) -> bool {
@@ -1276,24 +1294,6 @@ fn flatten_hidden_layers(hidden_layers: &[Vec<f32>]) -> Vec<f32> {
         hidden.extend_from_slice(layer);
     }
     hidden
-}
-
-fn best_hidden_activation(hidden: &[f32]) -> Option<(usize, f32)> {
-    let mut best: Option<(usize, f32)> = None;
-    for (index, activation) in hidden.iter().copied().enumerate() {
-        let replace = match best {
-            None => true,
-            Some((best_index, best_activation)) => {
-                activation > best_activation + READOUT_TIE_EPSILON
-                    || ((activation - best_activation).abs() <= READOUT_TIE_EPSILON
-                        && index < best_index)
-            }
-        };
-        if replace {
-            best = Some((index, activation));
-        }
-    }
-    best
 }
 
 fn validate_persisted_layers(input_dim: usize, layers: &[Layer]) -> Result<(), ManasError> {

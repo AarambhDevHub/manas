@@ -86,7 +86,7 @@ from Stage 2 onward.**
 | Stage 15 | Compression and forget command | Complete |
 | Stage 16 | Benchmarks and test suite | Complete |
 | Stage 17 | Layer growth | Complete |
-| Stage 18 | Internet agent (future) | Planned |
+| Stage 18 | Internet refresh agent | Complete |
 | Stage 19 | Language generation (future) | Planned |
 
 ---
@@ -627,9 +627,9 @@ impl ManasBrain {
 }
 ```
 
-**Binary format** (see ARCHITECTURE.md Section 11 for full spec):
+**Binary format** (see ARCHITECTURE.md Section 11 for the current full spec):
 ```
-[MAGIC: MANS] [VERSION: 2] [HEADER] [VOCAB] [LAYERS+NEURONS] [CRC32]
+[MAGIC: MANS] [VERSION: 3] [HEADER] [VOCAB] [LAYERS+NEURONS] [CRC32]
 ```
 
 ### Tests
@@ -2077,30 +2077,55 @@ fn deeper_network_can_represent_more_facts() {
 
 ---
 
-## Stage 18 — Internet Agent (Future)
+## Stage 18 — Internet Refresh Agent
 
 **Goal:** Manas can fetch fresh facts from the internet when its knowledge is stale.
 
-**Not started until Stage 17 is complete and the demo from Stage 13 is stable.**
+**Status:** Complete. Refresh is explicit through `manas refresh`; `manas ask`
+remains local-only and answers from neural weights.
 
-### Planned Behavior
+### Behavior
 
 ```bash
-./manas refresh          # re-fetch all Realtime neurons
+./manas refresh          # re-fetch stale Realtime neurons
 ./manas refresh --fast   # re-fetch all Fast neurons older than 30 days
+./manas refresh --dry-run # list candidates without network or save
 ```
 
-### Planned Architecture
+### Architecture
 
 ```
-detect stale neuron (freshness system)
-  → build search query from neuron's source context
-  → fetch from DuckDuckGo (no API key required)
-  → parse result
-  → re-teach the updated fact
-  → update neuron's born_at timestamp
-  → re-run importance + protection scoring
+detect stale hidden memory with stored refresh input/target
+  -> build a deduped DuckDuckGo query
+  -> fetch JSON from DuckDuckGo through manas-agent
+  -> parse AbstractText / Answer / RelatedTopics text
+  -> re-teach the updated fact into neural weights
+  -> stamp refreshed_at and reset freshness age
+  -> re-run importance + protection scoring
 ```
+
+### Done When
+
+- [x] `manas-agent` isolates HTTP and JSON dependencies from the core engine.
+- [x] `.manas` format v3 persists refresh input, refresh target, refreshed time,
+  and internet source URL while still loading v2 brains.
+- [x] `manas refresh`, `manas refresh --fast`, `manas refresh --dry-run`, and
+  `manas refresh --limit N` work through the CLI.
+- [x] Frozen stale memories are not overwritten; refreshed facts grow fresh
+  neural memory when needed.
+- [x] CI-safe tests use fixture clients instead of live internet.
+
+### Stage 18 Implementation Notes
+
+- Added `manas-agent` with `SearchClient`, `DuckDuckGoClient`,
+  `FixtureSearchClient`, refresh planning, DuckDuckGo JSON parsing, and refresh
+  report types.
+- Added refresh metadata to neurons and trainer stamping so taught facts carry
+  enough context for future explicit refresh.
+- Updated bound-memory query selection to prefer fresh refreshed duplicates over
+  stale duplicates when scores are effectively tied.
+- Added agent, trainer, store, and CLI tests for refresh planning, dry-run,
+  protected stale refresh, v2 compatibility, and fixture-backed CLI refresh.
 
 ---
 

@@ -15,6 +15,7 @@ const DEFAULT_EMBED_TABLE_SIZE: usize = 8192;
 const BOUND_REUSE_ACTIVATION: f32 = 0.55;
 const EXACT_REUSE_ACTIVATION: f32 = 0.98;
 const MIN_READOUT_ACTIVATION: f32 = 1.0e-6;
+const FRESH_READOUT_TIE_EPSILON: f32 = 0.05;
 
 /// Encoded input-target fact used by Stage 3 training.
 #[derive(Clone, Debug)]
@@ -82,8 +83,9 @@ struct HiddenSelection {
 
 struct BoundQueryCandidate {
     decoded: DecodedAnswer,
-    selection: HiddenSelection,
     score: f32,
+    freshness_warning: Option<FreshnessWarning>,
+    refreshed_at: u64,
 }
 
 impl Trainer {
@@ -214,7 +216,7 @@ impl Trainer {
 
         refresh_learning_metadata(network, &activation_counts_before, now_secs);
         let protection_report = self.update_protection_levels_at(network, now_secs);
-        assign_metadata_to_best_hidden(network, &fact.input, source, freshness);
+        assign_metadata_to_best_hidden(network, &fact.input, &fact, source, freshness);
 
         Ok(LearnReport {
             loss_before,
@@ -225,6 +227,74 @@ impl Trainer {
             neurons_frozen: protection_report.neurons_frozen,
             total_neurons: network.neuron_count(),
             update_applied,
+        })
+    }
+
+    pub fn refresh_memory_at(
+        &mut self,
+        network: &mut Network,
+        input: &str,
+        target: &str,
+        source: Source,
+        freshness: FreshnessCategory,
+        now_secs: u64,
+    ) -> Result<LearnReport, ManasError> {
+        let fact = self.encode_fact(input, target);
+        self.refresh_bound_fact_at(network, &fact, source, freshness, now_secs)
+    }
+
+    fn refresh_bound_fact_at(
+        &self,
+        network: &mut Network,
+        fact: &EncodedFact,
+        source: Source,
+        freshness: FreshnessCategory,
+        now_secs: u64,
+    ) -> Result<LearnReport, ManasError> {
+        let activation_counts_before = activation_counts_by_id(network);
+        let loss_before = loss_for_bound_fact(network, fact)?;
+        let mut neurons_grown = 0;
+        let mut layers_grown = 0;
+
+        let selection = match select_bound_hidden(network, &fact.input) {
+            BoundHiddenSelection::BindExisting(selection) => {
+                network.bind_hidden_neuron_to_fact(
+                    selection.neuron_id,
+                    &fact.input,
+                    &fact.target,
+                )?;
+                selection
+            }
+            BoundHiddenSelection::ReadOnly(_) | BoundHiddenSelection::Grow => {
+                let growth = grow_bound_memory_for_fact(network, fact)?;
+                layers_grown += growth.layers_grown;
+                neurons_grown += 1;
+                network.bind_hidden_neuron_to_fact(growth.neuron_id, &fact.input, &fact.target)?;
+                hidden_selection_by_id(network, growth.neuron_id)?
+            }
+        };
+
+        let loss_after = loss_for_bound_fact(network, fact)?;
+        refresh_learning_metadata(network, &activation_counts_before, now_secs);
+        let protection_report = self.update_protection_levels_at(network, now_secs);
+        assign_metadata_to_hidden_selection(
+            network,
+            selection,
+            fact,
+            source,
+            freshness,
+            Some(now_secs),
+        );
+
+        Ok(LearnReport {
+            loss_before,
+            loss_after,
+            neurons_grown,
+            layers_grown,
+            neurons_promoted: protection_report.neurons_promoted,
+            neurons_frozen: protection_report.neurons_frozen,
+            total_neurons: network.neuron_count(),
+            update_applied: true,
         })
     }
 
@@ -266,7 +336,7 @@ impl Trainer {
         let loss_after = loss_for_bound_fact(network, fact)?;
         refresh_learning_metadata(network, &activation_counts_before, now_secs);
         let protection_report = self.update_protection_levels_at(network, now_secs);
-        assign_metadata_to_hidden_selection(network, selection, source, freshness);
+        assign_metadata_to_hidden_selection(network, selection, fact, source, freshness, None);
 
         Ok(LearnReport {
             loss_before,
@@ -402,33 +472,45 @@ impl Trainer {
                 continue;
             }
 
-            let Some(readout) = network.readout_from_best_hidden(&input) else {
-                continue;
-            };
-            if readout.activation < MIN_READOUT_ACTIVATION {
-                continue;
-            }
+            for readout in network.readouts_from_hidden(&input) {
+                if readout.activation < MIN_READOUT_ACTIVATION {
+                    continue;
+                }
 
-            let Some(decoded) = decode_answer(&readout.output, &self.encoder, question) else {
-                continue;
-            };
-            let score = decoded.confidence * readout.activation.clamp(0.0, 1.0);
-
-            if best
-                .as_ref()
-                .map(|current| score > current.score)
-                .unwrap_or(true)
-            {
+                let Some(decoded) = decode_answer(&readout.output, &self.encoder, question) else {
+                    continue;
+                };
+                let score = decoded.confidence * readout.activation.clamp(0.0, 1.0);
                 let selection = HiddenSelection {
                     layer_index: readout.layer_index,
                     neuron_index: readout.neuron_index,
                     neuron_id: readout.neuron_id,
                 };
-                best = Some(BoundQueryCandidate {
+                let (freshness_warning, refreshed_at) = network
+                    .layers
+                    .get(selection.layer_index)
+                    .and_then(|layer| layer.neurons.get(selection.neuron_index))
+                    .map(|neuron| {
+                        (
+                            staleness_warning(neuron, unix_now_secs()),
+                            neuron.refreshed_at,
+                        )
+                    })
+                    .unwrap_or((None, 0));
+                let candidate = BoundQueryCandidate {
                     decoded,
-                    selection,
                     score,
-                });
+                    freshness_warning,
+                    refreshed_at,
+                };
+
+                if best
+                    .as_ref()
+                    .map(|current| better_bound_candidate(&candidate, current))
+                    .unwrap_or(true)
+                {
+                    best = Some(candidate);
+                }
             }
         }
 
@@ -436,17 +518,11 @@ impl Trainer {
             return not_enough();
         };
 
-        let freshness_warning = network
-            .layers
-            .get(best.selection.layer_index)
-            .and_then(|layer| layer.neurons.get(best.selection.neuron_index))
-            .and_then(|neuron| staleness_warning(neuron, unix_now_secs()));
-
         QueryResult {
             answer: best.decoded.answer,
             confidence: best.score.clamp(0.0, 1.0),
             answered_from: AnswerSource::NeuralWeights,
-            freshness_warning,
+            freshness_warning: best.freshness_warning,
         }
     }
 
@@ -480,6 +556,24 @@ fn loss_for_bound_fact(network: &Network, fact: &EncodedFact) -> Result<f32, Man
         .map(|readout| readout.output)
         .unwrap_or_else(|| vec![0.0; network.output_dim]);
     mse_loss(&output, &fact.target)
+}
+
+fn better_bound_candidate(candidate: &BoundQueryCandidate, current: &BoundQueryCandidate) -> bool {
+    if candidate.score > current.score + FRESH_READOUT_TIE_EPSILON {
+        return true;
+    }
+    if current.score > candidate.score + FRESH_READOUT_TIE_EPSILON {
+        return false;
+    }
+
+    match (
+        candidate.freshness_warning.is_some(),
+        current.freshness_warning.is_some(),
+    ) {
+        (false, true) => true,
+        (true, false) => false,
+        _ => candidate.refreshed_at > current.refreshed_at,
+    }
 }
 
 fn select_bound_hidden(network: &Network, input: &[f32]) -> BoundHiddenSelection {
@@ -693,6 +787,7 @@ fn grow_for_fact(network: &mut Network, fact: &EncodedFact) -> Result<BoundGrowt
 fn assign_metadata_to_best_hidden(
     network: &mut Network,
     input: &[f32],
+    fact: &EncodedFact,
     source: Source,
     freshness: FreshnessCategory,
 ) {
@@ -700,14 +795,16 @@ fn assign_metadata_to_best_hidden(
         return;
     };
 
-    assign_metadata_to_hidden_selection(network, selection, source, freshness);
+    assign_metadata_to_hidden_selection(network, selection, fact, source, freshness, None);
 }
 
 fn assign_metadata_to_hidden_selection(
     network: &mut Network,
     selection: HiddenSelection,
+    fact: &EncodedFact,
     source: Source,
     freshness: FreshnessCategory,
+    refreshed_at: Option<u64>,
 ) {
     if let Some(neuron) = network
         .layers
@@ -716,6 +813,13 @@ fn assign_metadata_to_hidden_selection(
     {
         neuron.source = source;
         neuron.freshness_category = freshness as u8;
+        neuron.memory_input = fact.input_text.clone();
+        neuron.memory_target = fact.target_text.clone();
+        if let Some(timestamp) = refreshed_at {
+            neuron.born_at = timestamp;
+            neuron.last_activated = timestamp;
+            neuron.refreshed_at = timestamp;
+        }
     }
 }
 
@@ -1253,6 +1357,29 @@ mod tests {
     }
 
     #[test]
+    fn learn_stamps_refresh_memory_metadata() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+
+        trainer
+            .learn(&mut network, "stock price", "10 today")
+            .unwrap();
+
+        assert!(
+            network
+                .layers
+                .iter()
+                .take(network.layer_count().saturating_sub(1))
+                .flat_map(|layer| layer.neurons.iter())
+                .any(|neuron| {
+                    neuron.memory_input == "stock price"
+                        && neuron.memory_target == "10 today"
+                        && neuron.refreshed_at == 0
+                })
+        );
+    }
+
+    #[test]
     fn learn_with_source_detects_freshness_metadata() {
         let mut network = Network::new_empty(32);
         let mut trainer = Trainer::new(0.01);
@@ -1327,6 +1454,62 @@ mod tests {
                 age_days: 31,
             })
         );
+    }
+
+    #[test]
+    fn refresh_memory_grows_for_protected_stale_fact_and_query_prefers_fresh_answer() {
+        let mut network = Network::new_empty(32);
+        let mut trainer = Trainer::new(0.01);
+        let now = unix_now_secs();
+
+        trainer
+            .learn_with_source_and_freshness(
+                &mut network,
+                "stock price",
+                "10 today",
+                Source::RawText,
+                FreshnessCategory::Realtime,
+            )
+            .unwrap();
+        let hidden_layers = network.layer_count().saturating_sub(1);
+        let mut protected_before = None;
+        for layer in network.layers.iter_mut().take(hidden_layers) {
+            for neuron in &mut layer.neurons {
+                if neuron.memory_input == "stock price" {
+                    neuron.born_at = now.saturating_sub(2 * 86_400);
+                    neuron.last_activated = neuron.born_at;
+                    neuron.freeze_all();
+                    protected_before = Some((neuron.id, neuron.weights.clone(), neuron.bias));
+                }
+            }
+        }
+        let neurons_before = network.neuron_count();
+
+        let report = trainer
+            .refresh_memory_at(
+                &mut network,
+                "stock price",
+                "20 today",
+                Source::Internet {
+                    url: "https://example.test/stock".to_string(),
+                },
+                FreshnessCategory::Realtime,
+                now,
+            )
+            .unwrap();
+
+        assert_eq!(report.neurons_grown, 1);
+        assert_eq!(network.neuron_count(), neurons_before + 1);
+        let (protected_id, weights_before, bias_before) = protected_before.unwrap();
+        let (layer_index, neuron_index) = network.hidden_location_by_id(protected_id).unwrap();
+        let protected = &network.layers[layer_index].neurons[neuron_index];
+        assert_eq!(protected.weights, weights_before);
+        assert_eq!(protected.bias, bias_before);
+
+        let result = trainer.query(&network, "What is stock price?").unwrap();
+        assert_eq!(result.answered_from, AnswerSource::NeuralWeights);
+        assert!(result.answer.contains("20"), "{}", result.answer);
+        assert_eq!(result.freshness_warning, None);
     }
 
     fn make_neuron_high_importance(neuron: &mut manas_core::Neuron, now_secs: u64) {
