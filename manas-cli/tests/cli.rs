@@ -359,6 +359,95 @@ fn cli_teach_stamps_realtime_freshness_metadata() {
 }
 
 #[test]
+fn cli_refresh_without_brain_is_noop() {
+    let dir = temp_dir("refresh-empty");
+
+    let refresh = run(&dir, &["refresh"]);
+    assert_success(&refresh);
+    let refresh_stdout = stdout(&refresh);
+
+    assert!(refresh_stdout.contains("Refresh"), "{refresh_stdout}");
+    assert!(
+        refresh_stdout.contains("candidates            : 0"),
+        "{refresh_stdout}"
+    );
+    assert!(
+        refresh_stdout.contains("brain saved           : no"),
+        "{refresh_stdout}"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_refresh_dry_run_does_not_fetch_or_save() {
+    let dir = temp_dir("refresh-dry-run");
+    teach_stock_price(&dir);
+    mark_stock_price_stale(&dir, false);
+    let path = dir.join("brain.manas");
+    let size_before = fs::metadata(&path).unwrap().len();
+
+    let refresh = run(&dir, &["refresh", "--dry-run"]);
+    assert_success(&refresh);
+    let refresh_stdout = stdout(&refresh);
+
+    assert!(
+        refresh_stdout.contains("dry run               : yes"),
+        "{refresh_stdout}"
+    );
+    assert!(
+        refresh_stdout.contains("candidates            : 1"),
+        "{refresh_stdout}"
+    );
+    assert!(
+        refresh_stdout.contains("fetched               : 0"),
+        "{refresh_stdout}"
+    );
+    assert_eq!(fs::metadata(&path).unwrap().len(), size_before);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_refresh_uses_fixture_and_updates_neural_answer() {
+    let dir = temp_dir("refresh-fixture");
+    teach_stock_price(&dir);
+    mark_stock_price_stale(&dir, true);
+    let fixture = dir.join("refresh.tsv");
+    fs::write(
+        &fixture,
+        "stock price 10 today\tstock price is 20 today\thttps://example.test/stock\n",
+    )
+    .unwrap();
+
+    let refresh = run_with_env(
+        &dir,
+        &["refresh"],
+        "MANAS_REFRESH_FIXTURE",
+        fixture.to_str().unwrap(),
+    );
+    assert_success(&refresh);
+    let refresh_stdout = stdout(&refresh);
+    assert!(
+        refresh_stdout.contains("refreshed             : 1"),
+        "{refresh_stdout}"
+    );
+    assert!(
+        refresh_stdout.contains("brain saved           : yes"),
+        "{refresh_stdout}"
+    );
+
+    let ask = run(&dir, &["ask", "What is stock price?"]);
+    assert_success(&ask);
+    let ask_stdout = stdout(&ask);
+    assert!(ask_stdout.contains("neural weights"), "{ask_stdout}");
+    assert!(ask_stdout.contains("20"), "{ask_stdout}");
+    assert!(!ask_stdout.contains("may be outdated"), "{ask_stdout}");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn cli_ask_without_brain_returns_not_enough() {
     let dir = temp_dir("empty-ask");
 
@@ -376,6 +465,15 @@ fn run(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_manas"))
         .args(args)
         .current_dir(dir)
+        .output()
+        .unwrap()
+}
+
+fn run_with_env(dir: &Path, args: &[&str], key: &str, value: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_manas"))
+        .args(args)
+        .current_dir(dir)
+        .env(key, value)
         .output()
         .unwrap()
 }
@@ -443,5 +541,35 @@ fn write_compressible_brain(dir: &Path) {
 
     ManasBrain::new(dir.join("brain.manas"))
         .save_state(&BrainState::new(network, Vec::new()))
+        .unwrap();
+}
+
+fn teach_stock_price(dir: &Path) {
+    let teach = run(dir, &["teach", "The stock price is 10 today."]);
+    assert_success(&teach);
+}
+
+fn mark_stock_price_stale(dir: &Path, freeze: bool) {
+    let brain = ManasBrain::new(dir.join("brain.manas"));
+    let mut state = brain.load_state().unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let hidden_layers = state.network.layer_count().saturating_sub(1);
+    for layer in state.network.layers.iter_mut().take(hidden_layers) {
+        for neuron in &mut layer.neurons {
+            if neuron.memory_input == "stock price" {
+                neuron.freshness_category = FreshnessCategory::Realtime as u8;
+                neuron.born_at = now.saturating_sub(2 * 86_400);
+                neuron.last_activated = neuron.born_at;
+                if freeze {
+                    neuron.freeze_all();
+                }
+            }
+        }
+    }
+    brain
+        .save_state(&BrainState::new(state.network, state.vocab_entries))
         .unwrap();
 }

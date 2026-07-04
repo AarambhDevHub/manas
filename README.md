@@ -135,7 +135,8 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 15 | Compression and forget command | Complete |
 | Stage 16 | Benchmarks and test suite | Complete |
 | Stage 17 | Layer growth | Complete |
-| Stage 18+ | Internet agent, language generation | Planned |
+| Stage 18 | Internet refresh agent | Complete |
+| Stage 19+ | Language generation | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -172,6 +173,9 @@ ingestion.
 Stage 17 adds real hidden-layer growth: when existing hidden memory is saturated,
 Manas can insert a new hidden layer before the output layer while keeping older
 bound answer columns intact.
+Stage 18 adds an explicit internet refresh path: `manas refresh` finds stale
+Realtime memories, fetches updated facts through DuckDuckGo, re-teaches the
+updated answer into neural weights, and leaves `manas ask` local-only.
 
 Run the proof:
 
@@ -258,6 +262,13 @@ cargo test layer_growth
 cargo test stage17
 ```
 
+Run the Stage 18 refresh proof:
+
+```bash
+cargo test -p manas-agent
+cargo test -p manas-cli refresh
+```
+
 Run the benchmarks:
 
 ```bash
@@ -311,28 +322,28 @@ cargo build --workspace --release
 
 ## Architecture
 
-Manas v2 is built from 5 runtime Rust crates plus one benchmark tooling crate:
+Manas v2 is built from 6 runtime Rust crates plus one benchmark tooling crate:
 
 ```
 ┌──────────────────────────────────────────┐
 │              manas-cli                   │
 │   teach | ask | inspect | neurons        │
-│   trace | forget | reset                 │
+│   trace | forget | refresh | reset       │
 └───────────────────┬──────────────────────┘
                     │
-     ┌──────────────┼──────────────┐
-     ▼              ▼              ▼
-┌─────────┐  ┌───────────┐  ┌───────────┐
-│ manas-  │  │  manas-   │  │  manas-   │
-│ ingest  │  │  learn    │  │  store    │
-│         │  │           │  │           │
-│ text    │  │ tokenizer │  │ .manas    │
-│ files   │  │ embedder  │  │ binary    │
-│ folders │  │ backprop  │  │ format    │
-│ formats │  │ trainer   │  │ CRC32     │
-└────┬────┘  └─────┬─────┘  └───────────┘
-     │              │
-     └──────┬───────┘
+     ┌──────────────┼──────────────┬──────────────┐
+     ▼              ▼              ▼              ▼
+┌─────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐
+│ manas-  │  │  manas-   │  │  manas-   │  │  manas-   │
+│ ingest  │  │  learn    │  │  store    │  │  agent    │
+│         │  │           │  │           │  │           │
+│ text    │  │ tokenizer │  │ .manas    │  │ refresh   │
+│ files   │  │ embedder  │  │ binary    │  │ DuckDuckGo│
+│ folders │  │ backprop  │  │ format    │  │ fetch     │
+│ formats │  │ trainer   │  │ CRC32     │  │ parse     │
+└────┬────┘  └─────┬─────┘  └───────────┘  └─────┬─────┘
+     │              │                             │
+     └──────┬───────┴─────────────────────────────┘
             ▼
 ┌──────────────────────────────────────────┐
 │              manas-core                  │
@@ -351,9 +362,10 @@ Manas v2 is built from 5 runtime Rust crates plus one benchmark tooling crate:
      grows: one neuron at a time
 ```
 
-**No `manas-language` crate.** No `manas-agent` crate. No `manas-memory` crate.
+**No `manas-language` crate.** No `manas-memory` crate.
 The transformer path from v1 is removed. The text sidecar from v1 is removed.
 The answering system from v1 is replaced with direct neural weight retrieval.
+`manas-agent` is refresh-only; it is not used by `manas ask`.
 
 `manas-benches` is a non-runtime workspace crate used for Stage 16 benchmark
 measurement and CI smoke coverage.
@@ -365,7 +377,7 @@ measurement and CI smoke coverage.
 Everything lives in one binary file. No sidecars. No `.sources`. No `.sourceindex`.
 
 ```
-[ MAGIC: MANS ] [ VERSION: 2 ] [ HEADER ]
+[ MAGIC: MANS ] [ VERSION: 3 ] [ HEADER ]
 [ VOCAB SECTION ] [ LAYER + NEURON SECTION ]
 [ CRC32 CHECKSUM ]
 ```
@@ -377,6 +389,7 @@ Every neuron stores:
 - Born timestamp and last activated timestamp
 - Source (raw text or local file path)
 - Freshness category (Timeless / Slow / Fast / Realtime)
+- Refresh memory input/target and refreshed timestamp
 
 The entire brain — weights, vocab, metadata — is in this one file.
 `ask` reads the weights directly. No text search. No keyword matching.

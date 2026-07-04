@@ -180,6 +180,9 @@ mod tests {
             activation_count: 0,
             source: Source::Unknown,
             freshness_category: 1,
+            memory_input: String::new(),
+            memory_target: String::new(),
+            refreshed_at: 0,
         }
     }
 }

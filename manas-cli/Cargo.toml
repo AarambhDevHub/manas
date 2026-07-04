@@ -8,6 +8,7 @@ name = "manas"
 path = "src/main.rs"
 
 [dependencies]
+manas-agent = { workspace = true }
 manas-core   = { workspace = true }
 manas-store  = { workspace = true }
 manas-learn  = { workspace = true }

@@ -6,14 +6,14 @@ Mode: `full`
 
 | ID | Benchmark | Result | Unit | Detail |
 |---|---|---:|---|---|
-| B1 | single teach | 0.0446 | ms/op | 25 iterations |
-| B2 | single ask | 0.0187 | ms/op | 200 iterations |
-| B3 | .manas save | 0.1718 | ms/op | 25 iterations |
-| B4 | .manas load | 0.1518 | ms/op | 50 iterations |
-| B5 | tokenizer 1000 words | 0.3843 | ms/op | 100 iterations |
-| B6 | anti-forgetting proof | 0.4043 | s | single fixed seed |
-| B7 | 1000-neuron footprint | 419.6875 | KiB | estimated heap footprint, total=1000 |
-| B8 | brain growth per fact | 768.8750 | bytes/fact | n=32, min=646, max=4534 |
+| B1 | single teach | 0.0687 | ms/op | 25 iterations |
+| B2 | single ask | 0.0278 | ms/op | 200 iterations |
+| B3 | .manas save | 0.4808 | ms/op | 25 iterations |
+| B4 | .manas load | 0.1639 | ms/op | 50 iterations |
+| B5 | tokenizer 1000 words | 0.3568 | ms/op | 100 iterations |
+| B6 | anti-forgetting proof | 0.3720 | s | single fixed seed |
+| B7 | 1000-neuron footprint | 482.1875 | KiB | estimated heap footprint, total=1000 |
+| B8 | brain growth per fact | 827.2500 | bytes/fact | n=32, min=687, max=5087 |
 
 B7 reports an internal heap-footprint estimate for network-owned buffers and neuron storage, not process RSS.
 
