@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use manas_core::Source;
+use manas_core::{Network, ProtectionLevel, Source};
 use manas_learn::FreshnessCategory;
 use manas_store::{BrainState, ManasBrain};
 
@@ -107,6 +107,103 @@ fn cli_stage14_inspect_neurons_and_trace_work() {
     assert!(
         trace_stdout.contains("animal") || trace_stdout.contains("fur"),
         "{trace_stdout}"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_forget_without_brain_is_noop() {
+    let dir = temp_dir("forget-empty");
+
+    let forget = run(&dir, &["forget"]);
+    assert_success(&forget);
+    let forget_stdout = stdout(&forget);
+
+    assert!(forget_stdout.contains("Forget"), "{forget_stdout}");
+    assert!(
+        forget_stdout.contains("candidates            : 0"),
+        "{forget_stdout}"
+    );
+    assert!(
+        forget_stdout.contains("neurons removed       : 0"),
+        "{forget_stdout}"
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_forget_dry_run_does_not_modify_brain() {
+    let dir = temp_dir("forget-dry-run");
+    write_compressible_brain(&dir);
+    let path = dir.join("brain.manas");
+    let size_before = fs::metadata(&path).unwrap().len();
+    let count_before = ManasBrain::new(path.clone())
+        .load_state()
+        .unwrap()
+        .network
+        .neuron_count();
+
+    let forget = run(&dir, &["forget", "--dry-run"]);
+    assert_success(&forget);
+    let forget_stdout = stdout(&forget);
+
+    assert!(
+        forget_stdout.contains("dry run               : yes"),
+        "{forget_stdout}"
+    );
+    assert!(
+        forget_stdout.contains("candidates            : 1"),
+        "{forget_stdout}"
+    );
+    assert_eq!(fs::metadata(&path).unwrap().len(), size_before);
+    assert_eq!(
+        ManasBrain::new(path.clone())
+            .load_state()
+            .unwrap()
+            .network
+            .neuron_count(),
+        count_before
+    );
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn cli_forget_compresses_and_shrinks_brain_file() {
+    let dir = temp_dir("forget-shrink");
+    write_compressible_brain(&dir);
+    let path = dir.join("brain.manas");
+    let size_before = fs::metadata(&path).unwrap().len();
+    let count_before = ManasBrain::new(path.clone())
+        .load_state()
+        .unwrap()
+        .network
+        .neuron_count();
+
+    let forget = run(&dir, &["forget", "--threshold", "0.20"]);
+    assert_success(&forget);
+    let forget_stdout = stdout(&forget);
+
+    assert!(
+        forget_stdout.contains("dry run               : no"),
+        "{forget_stdout}"
+    );
+    assert!(
+        forget_stdout.contains("neurons removed       : 1"),
+        "{forget_stdout}"
+    );
+    let size_after = fs::metadata(&path).unwrap().len();
+    let count_after = ManasBrain::new(path.clone())
+        .load_state()
+        .unwrap()
+        .network
+        .neuron_count();
+    assert!(size_after < size_before, "{size_before} -> {size_after}");
+    assert!(
+        count_after < count_before,
+        "{count_before} -> {count_after}"
     );
 
     fs::remove_dir_all(dir).unwrap();
@@ -309,4 +406,42 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("manas-cli-{name}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+fn write_compressible_brain(dir: &Path) {
+    let mut network = Network::new_empty(4);
+    for _ in 0..3 {
+        network.grow_neuron(0, 4).unwrap();
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let day = 86_400;
+
+    network.layers[0].neurons[0].weights = vec![1.0, 0.0, 0.0, 0.0];
+    network.layers[0].neurons[0].guard_all();
+    network.layers[0].neurons[0].importance_score = 0.75;
+    network.layers[0].neurons[0].last_activated = now;
+    network.layers[0].neurons[0].born_at = now - 2 * day;
+
+    network.layers[0].neurons[1].weights = vec![1.0, 0.0, 0.0, 0.0];
+    network.layers[0].neurons[1].importance_score = 0.01;
+    network.layers[0].neurons[1].last_activated = now - 31 * day;
+    network.layers[0].neurons[1].born_at = now - 60 * day;
+
+    network.layers[0].neurons[2].weights = vec![0.0, 1.0, 0.0, 0.0];
+    network.layers[0].neurons[2].importance_score = 0.80;
+    network.layers[0].neurons[2].last_activated = now;
+    network.layers[0].neurons[2].born_at = now - 2 * day;
+
+    for output_neuron in &mut network.layers[1].neurons {
+        output_neuron.weights = vec![0.25, 0.05, 0.10];
+        output_neuron.weight_protection = vec![ProtectionLevel::Open; 3];
+    }
+
+    ManasBrain::new(dir.join("brain.manas"))
+        .save_state(&BrainState::new(network, Vec::new()))
+        .unwrap();
 }

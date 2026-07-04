@@ -44,6 +44,13 @@ pub struct HiddenReadout {
     pub output: Vec<f32>,
 }
 
+/// Merge one hidden neuron into another retained hidden neuron, then remove it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HiddenNeuronMerge {
+    pub source_index: usize,
+    pub target_index: usize,
+}
+
 /// Summary of anchor consolidation.
 #[derive(Clone, Debug)]
 pub struct ConsolidationReport {
@@ -161,19 +168,7 @@ impl Network {
             .max()
             .map_or(0, |id| id.saturating_add(1));
 
-        let protected_inputs = layers[0]
-            .neurons
-            .iter()
-            .filter(|neuron| {
-                matches!(neuron.activation, Activation::Keyed)
-                    && matches!(neuron.protection_level, ProtectionLevel::Frozen)
-            })
-            .map(|neuron| {
-                let mut protected = neuron.weights.clone();
-                normalize_in_place(&mut protected);
-                protected
-            })
-            .collect();
+        let protected_inputs = protected_inputs_from_layers(&layers);
 
         Ok(Self {
             layers,
@@ -467,6 +462,176 @@ impl Network {
                     .all(|neuron| matches!(neuron.activation, Activation::Keyed))
             })
             .unwrap_or(false)
+    }
+
+    pub fn merge_remove_hidden_neurons(
+        &mut self,
+        merges: &[HiddenNeuronMerge],
+    ) -> Result<usize, ManasError> {
+        if merges.is_empty() {
+            return Ok(0);
+        }
+        if self.layers.len() != 2 {
+            return Err(ManasError::InvalidNetwork(format!(
+                "hidden compaction expects exactly 2 layers, found {}",
+                self.layers.len()
+            )));
+        }
+        if self.layers[0].neurons.is_empty() || self.layers[1].neurons.is_empty() {
+            return Err(ManasError::InvalidNetwork(
+                "hidden compaction requires non-empty hidden and output layers".to_string(),
+            ));
+        }
+        if self.layers[1].neurons.len() != self.output_dim {
+            return Err(ManasError::InvalidNetwork(format!(
+                "output layer has {} neurons, expected {}",
+                self.layers[1].neurons.len(),
+                self.output_dim
+            )));
+        }
+
+        let hidden_len = self.layers[0].neurons.len();
+        for output_neuron in &self.layers[1].neurons {
+            if output_neuron.weights.len() != hidden_len {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "output neuron {} has {} hidden weights, expected {}",
+                    output_neuron.id,
+                    output_neuron.weights.len(),
+                    hidden_len
+                )));
+            }
+            if output_neuron.weight_protection.len() != hidden_len {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "output neuron {} has {} protection entries, expected {}",
+                    output_neuron.id,
+                    output_neuron.weight_protection.len(),
+                    hidden_len
+                )));
+            }
+        }
+
+        let mut source_indices = HashSet::new();
+        for merge in merges {
+            if merge.source_index >= hidden_len {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "hidden merge source index {} out of range {}",
+                    merge.source_index, hidden_len
+                )));
+            }
+            if merge.target_index >= hidden_len {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "hidden merge target index {} out of range {}",
+                    merge.target_index, hidden_len
+                )));
+            }
+            if merge.source_index == merge.target_index {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "hidden merge source and target are both {}",
+                    merge.source_index
+                )));
+            }
+            if !source_indices.insert(merge.source_index) {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "duplicate hidden merge source index {}",
+                    merge.source_index
+                )));
+            }
+        }
+
+        if source_indices.len() >= hidden_len {
+            return Err(ManasError::InvalidNetwork(
+                "hidden compaction cannot remove every hidden neuron".to_string(),
+            ));
+        }
+
+        let mut additions_by_target = vec![Vec::new(); hidden_len];
+        for merge in merges {
+            if source_indices.contains(&merge.target_index) {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "hidden merge target {} is also scheduled for removal",
+                    merge.target_index
+                )));
+            }
+
+            let source = &self.layers[0].neurons[merge.source_index];
+            if !matches!(source.protection_level, ProtectionLevel::Open) {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "cannot remove protected hidden neuron {}",
+                    source.id
+                )));
+            }
+
+            let target = &self.layers[0].neurons[merge.target_index];
+            if matches!(target.protection_level, ProtectionLevel::Frozen) {
+                return Err(ManasError::InvalidNetwork(format!(
+                    "cannot merge into frozen hidden neuron {}",
+                    target.id
+                )));
+            }
+
+            for output_neuron in &self.layers[1].neurons {
+                let source_protection = output_neuron.weight_protection[merge.source_index];
+                if !matches!(source_protection, ProtectionLevel::Open) {
+                    return Err(ManasError::InvalidNetwork(format!(
+                        "cannot remove protected output edge {} -> {}",
+                        merge.source_index, output_neuron.id
+                    )));
+                }
+
+                let target_protection = output_neuron.weight_protection[merge.target_index];
+                if matches!(target_protection, ProtectionLevel::Frozen) {
+                    return Err(ManasError::InvalidNetwork(format!(
+                        "cannot merge into frozen output edge {} -> {}",
+                        merge.target_index, output_neuron.id
+                    )));
+                }
+            }
+
+            additions_by_target[merge.target_index].push(merge.source_index);
+        }
+
+        let retained_indices = (0..hidden_len)
+            .filter(|index| !source_indices.contains(index))
+            .collect::<Vec<_>>();
+        let new_hidden = retained_indices
+            .iter()
+            .map(|index| self.layers[0].neurons[*index].clone())
+            .collect::<Vec<_>>();
+
+        for output_neuron in &mut self.layers[1].neurons {
+            let old_weights = output_neuron.weights.clone();
+            let old_protections = output_neuron.weight_protection.clone();
+            let mut new_weights = Vec::with_capacity(retained_indices.len());
+            let mut new_protections = Vec::with_capacity(retained_indices.len());
+
+            for retained_index in &retained_indices {
+                let mut weight = old_weights[*retained_index];
+                let mut protection = old_protections[*retained_index];
+
+                for source_index in &additions_by_target[*retained_index] {
+                    weight += old_weights[*source_index];
+                    protection = protection.strongest(old_protections[*source_index]);
+                }
+
+                new_weights.push(weight);
+                new_protections.push(protection);
+            }
+
+            output_neuron.weights = new_weights;
+            output_neuron.weight_protection = new_protections;
+        }
+
+        self.layers[0].neurons = new_hidden;
+        self.hidden_dim = self.layers[0].neurons.len();
+        self.total_neurons = self
+            .layers
+            .iter()
+            .map(|layer| layer.neurons.len() as u64)
+            .sum();
+        self.refresh_protected_inputs();
+        validate_persisted_layers(self.input_dim, &self.layers)?;
+
+        Ok(source_indices.len())
     }
 
     pub fn consolidate_anchor_facts(
@@ -829,6 +994,10 @@ impl Network {
             output_neuron.weight_protection.push(ProtectionLevel::Open);
         }
     }
+
+    fn refresh_protected_inputs(&mut self) {
+        self.protected_inputs = protected_inputs_from_layers(&self.layers);
+    }
 }
 
 fn validate_persisted_layers(input_dim: usize, layers: &[Layer]) -> Result<(), ManasError> {
@@ -891,6 +1060,27 @@ fn validate_persisted_layers(input_dim: usize, layers: &[Layer]) -> Result<(), M
     }
 
     Ok(())
+}
+
+fn protected_inputs_from_layers(layers: &[Layer]) -> Vec<Vec<f32>> {
+    layers
+        .first()
+        .map(|layer| {
+            layer
+                .neurons
+                .iter()
+                .filter(|neuron| {
+                    matches!(neuron.activation, Activation::Keyed)
+                        && matches!(neuron.protection_level, ProtectionLevel::Frozen)
+                })
+                .map(|neuron| {
+                    let mut protected = neuron.weights.clone();
+                    normalize_in_place(&mut protected);
+                    protected
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn apply_weight_updates(
@@ -1183,6 +1373,93 @@ mod tests {
         assert_eq!(network.frozen_neuron_count(), 1);
         assert_eq!(network.guarded_neuron_count(), 1);
         assert_eq!(network.open_neuron_count(), total - 2);
+    }
+
+    #[test]
+    fn compression_merge_remove_hidden_neuron_updates_output_edges() {
+        let mut network = Network::new_empty(4);
+        network.grow_neuron(0, 4).unwrap();
+        network.grow_neuron(0, 4).unwrap();
+        network.grow_neuron(0, 4).unwrap();
+
+        for output_neuron in &mut network.layers[1].neurons {
+            output_neuron.weights = vec![1.0, 2.0, 3.0];
+            output_neuron.weight_protection = vec![ProtectionLevel::Open; 3];
+        }
+
+        let removed = network
+            .merge_remove_hidden_neurons(&[HiddenNeuronMerge {
+                source_index: 1,
+                target_index: 0,
+            }])
+            .unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(network.hidden_dim, 2);
+        assert_eq!(network.layers[0].neurons.len(), 2);
+        assert_eq!(network.neuron_count(), 6);
+        for output_neuron in &network.layers[1].neurons {
+            assert_eq!(output_neuron.weights, vec![3.0, 3.0]);
+            assert_eq!(output_neuron.weight_protection.len(), 2);
+        }
+    }
+
+    #[test]
+    fn compression_rejects_protected_hidden_source() {
+        let mut network = Network::new_empty(4);
+        network.grow_neuron(0, 4).unwrap();
+        network.grow_neuron(0, 4).unwrap();
+        network.layers[0].neurons[1].guard_all();
+
+        let result = network.merge_remove_hidden_neurons(&[HiddenNeuronMerge {
+            source_index: 1,
+            target_index: 0,
+        }]);
+
+        assert!(matches!(result, Err(ManasError::InvalidNetwork(_))));
+        assert_eq!(network.layers[0].neurons.len(), 2);
+        assert_eq!(network.layers[1].neurons[0].weights.len(), 2);
+    }
+
+    #[test]
+    fn compression_rejects_frozen_output_target_edge() {
+        let mut network = Network::new_empty(4);
+        network.grow_neuron(0, 4).unwrap();
+        network.grow_neuron(0, 4).unwrap();
+        network.layers[1].neurons[0].weight_protection[0] = ProtectionLevel::Frozen;
+        let weights_before = network.layers[1].neurons[0].weights.clone();
+
+        let result = network.merge_remove_hidden_neurons(&[HiddenNeuronMerge {
+            source_index: 1,
+            target_index: 0,
+        }]);
+
+        assert!(matches!(result, Err(ManasError::InvalidNetwork(_))));
+        assert_eq!(network.layers[0].neurons.len(), 2);
+        assert_eq!(network.layers[1].neurons[0].weights, weights_before);
+    }
+
+    #[test]
+    fn compression_rejects_target_that_is_also_removed() {
+        let mut network = Network::new_empty(4);
+        network.grow_neuron(0, 4).unwrap();
+        network.grow_neuron(0, 4).unwrap();
+        network.grow_neuron(0, 4).unwrap();
+
+        let result = network.merge_remove_hidden_neurons(&[
+            HiddenNeuronMerge {
+                source_index: 1,
+                target_index: 0,
+            },
+            HiddenNeuronMerge {
+                source_index: 0,
+                target_index: 2,
+            },
+        ]);
+
+        assert!(matches!(result, Err(ManasError::InvalidNetwork(_))));
+        assert_eq!(network.layers[0].neurons.len(), 3);
+        assert_eq!(network.layers[1].neurons[0].weights.len(), 3);
     }
 
     #[test]

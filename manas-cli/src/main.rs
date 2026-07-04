@@ -7,9 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use manas_core::{Activation, Network, ProtectionLevel};
 use manas_ingest::{IngestSource, ingest};
 use manas_learn::{
-    AnswerSource, BrainDiagnostics, EncoderVocabEntry, FreshnessWarning, LearnReport,
-    NeuronDiagnostics, NeuronFilter, QueryTrace, Trainer, detect_freshness,
-    filtered_neuron_diagnostics, trace_query,
+    AnswerSource, BrainDiagnostics, CompressionConfig, CompressionPlan, CompressionReport,
+    DEFAULT_COMPRESSION_THRESHOLD, EncoderVocabEntry, FreshnessWarning, LearnReport,
+    NeuronDiagnostics, NeuronFilter, QueryTrace, Trainer, compress, detect_freshness,
+    filtered_neuron_diagnostics, plan_compression, trace_query,
 };
 use manas_store::{BrainState, ManasBrain, VocabEntry};
 
@@ -44,6 +45,7 @@ where
         "inspect" => inspect(brain_path),
         "neurons" => neurons(brain_path, &args[1..]),
         "trace" => trace(brain_path, &args[1..]),
+        "forget" => forget(brain_path, &args[1..]),
         "reset" => reset(brain_path),
         "help" | "--help" | "-h" => {
             print_help();
@@ -302,6 +304,57 @@ fn trace(brain_path: &Path, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn forget(brain_path: &Path, args: &[String]) -> Result<(), String> {
+    let request = forget_request(args)?;
+    let brain = ManasBrain::new(brain_path);
+    let config = CompressionConfig::with_threshold(request.threshold);
+
+    if !brain.exists() {
+        let plan = CompressionPlan {
+            threshold: config.threshold,
+            min_idle_days: config.min_idle_days,
+            min_merge_similarity: config.min_merge_similarity,
+            candidates: Vec::new(),
+            skipped: Default::default(),
+        };
+        print_forget_report(request.dry_run, 0, 0, 0, &plan, None);
+        return Ok(());
+    }
+
+    let mut state = brain.load_state().map_err(|error| error.to_string())?;
+    let size_before = brain.size_bytes();
+
+    if request.dry_run {
+        let plan = plan_compression(&state.network, &config).map_err(|error| error.to_string())?;
+        print_forget_report(
+            true,
+            size_before,
+            size_before,
+            state.network.neuron_count(),
+            &plan,
+            None,
+        );
+        return Ok(());
+    }
+
+    let report = compress(&mut state.network, &config).map_err(|error| error.to_string())?;
+    if report.neurons_removed > 0 {
+        brain
+            .save_state(&BrainState::new(state.network, state.vocab_entries))
+            .map_err(|error| error.to_string())?;
+    }
+    let size_after = brain.size_bytes();
+    print_forget_report(
+        false,
+        size_before,
+        size_after,
+        report.neurons_before,
+        &report.plan,
+        Some(&report),
+    );
+    Ok(())
+}
+
 fn reset(brain_path: &Path) -> Result<(), String> {
     remove_if_exists(brain_path)?;
     for sidecar in known_sidecar_paths(brain_path) {
@@ -432,7 +485,75 @@ fn print_help() {
     println!("  manas inspect");
     println!("  manas neurons [--protection open|guarded|frozen] [--source <text>]");
     println!("  manas trace <question> [--limit N]");
+    println!("  manas forget [--dry-run] [--threshold N]");
     println!("  manas reset");
+}
+
+fn print_forget_report(
+    dry_run: bool,
+    size_before: u64,
+    size_after: u64,
+    neurons_before: u64,
+    plan: &CompressionPlan,
+    report: Option<&CompressionReport>,
+) {
+    let projected_removed = plan.projected_removed();
+    let neurons_removed = report
+        .map(|report| report.neurons_removed)
+        .unwrap_or(projected_removed);
+    let neurons_after = report
+        .map(|report| report.neurons_after)
+        .unwrap_or_else(|| neurons_before.saturating_sub(projected_removed as u64));
+
+    println!("Forget");
+    println!("  dry run               : {}", yes_no(dry_run));
+    println!("  threshold             : {:.4}", plan.threshold);
+    println!("  min idle days         : {}", plan.min_idle_days);
+    println!("  min merge similarity  : {:.4}", plan.min_merge_similarity);
+    println!("  candidates            : {}", plan.candidates.len());
+    println!("  neurons before        : {}", neurons_before);
+    println!("  neurons after         : {}", neurons_after);
+    println!("  neurons removed       : {}", neurons_removed);
+    println!("  size before bytes     : {}", size_before);
+    println!("  size after bytes      : {}", size_after);
+    println!(
+        "  size delta bytes      : {}",
+        size_after as i128 - size_before as i128
+    );
+    println!();
+    println!("Skipped");
+    println!("  protected             : {}", plan.skipped.protected);
+    println!("  high importance       : {}", plan.skipped.high_importance);
+    println!("  recent                : {}", plan.skipped.recent);
+    println!("  no merge target       : {}", plan.skipped.no_merge_target);
+    println!(
+        "  unsupported shape     : {}",
+        plan.skipped.unsupported_shape
+    );
+    println!();
+    println!("Candidates");
+    if plan.candidates.is_empty() {
+        println!("  none");
+        return;
+    }
+
+    println!(
+        "  {:<5} {:<6} {:<8} {:<6} {:<8} {:>10} {:>8} {:>10}",
+        "index", "id", "target", "id", "idle", "importance", "days", "similarity"
+    );
+    for candidate in &plan.candidates {
+        println!(
+            "  {:<5} {:<6} {:<8} {:<6} {:<8} {:>10.4} {:>8} {:>10.4}",
+            candidate.source_index,
+            candidate.source_neuron_id,
+            candidate.target_index,
+            candidate.target_neuron_id,
+            "merge",
+            candidate.importance_score,
+            candidate.idle_days,
+            candidate.merge_similarity
+        );
+    }
 }
 
 fn print_empty_inspect(brain_path: &Path) {
@@ -667,6 +788,42 @@ fn trace_request(args: &[String]) -> Result<TraceRequest, String> {
         question: joined_text(&question_parts)?,
         limit,
     })
+}
+
+struct ForgetRequest {
+    dry_run: bool,
+    threshold: f32,
+}
+
+fn forget_request(args: &[String]) -> Result<ForgetRequest, String> {
+    let mut dry_run = false;
+    let mut threshold = DEFAULT_COMPRESSION_THRESHOLD;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dry-run" => dry_run = true,
+            "--threshold" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| "--threshold requires a value".to_string())?;
+                threshold = value
+                    .parse::<f32>()
+                    .map_err(|_| format!("invalid --threshold value '{value}'"))?;
+                if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+                    return Err("--threshold must be between 0.0 and 1.0".to_string());
+                }
+            }
+            option if option.starts_with("--") => {
+                return Err(format!("unknown forget option '{option}'"));
+            }
+            value => return Err(format!("unexpected forget argument '{value}'")),
+        }
+        index += 1;
+    }
+
+    Ok(ForgetRequest { dry_run, threshold })
 }
 
 fn parse_protection(value: &str) -> Result<ProtectionLevel, String> {

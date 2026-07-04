@@ -132,7 +132,7 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 12 | Freshness system | Complete |
 | Stage 13 | The real demo | Complete |
 | Stage 14 | Inspect, neurons, and debug commands | Complete |
-| Stage 15 | Compression and forget command | Next |
+| Stage 15 | Compression and forget command | Complete |
 | Stage 16+ | Benchmarks, layer growth, future agents | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
@@ -160,7 +160,9 @@ neuron metadata. Stage 13 adds the full 22-fact proof: the demo teaches facts,
 deletes historical sidecars, and verifies that five questions answer from neural
 weights only with compact decoded answer words. Stage 14 makes the brain
 inspectable with rich `inspect`, `neurons`, and `trace` commands for debugging
-learned weights, metadata, and query flow.
+learned weights, metadata, and query flow. Stage 15 adds conservative
+compression through `manas forget`, merging only stale low-importance `Open`
+hidden neurons that have a highly similar retained neighbor.
 
 Run the proof:
 
@@ -227,6 +229,13 @@ Run the importance proof:
 cargo test -p manas-learn importance
 ```
 
+Run the compression proof:
+
+```bash
+cargo test -p manas-core compression
+cargo test -p manas-learn compression
+```
+
 Run the CLI proof:
 
 ```bash
@@ -278,7 +287,7 @@ Manas v2 is built from 5 Rust crates, each with a single responsibility:
 ┌──────────────────────────────────────────┐
 │              manas-cli                   │
 │   teach | ask | inspect | neurons        │
-│   trace | reset                          │
+│   trace | forget | reset                 │
 └───────────────────┬──────────────────────┘
                     │
      ┌──────────────┼──────────────┐
@@ -395,7 +404,9 @@ manas/
 │       ├── decoder.rs
 │       ├── backprop.rs
 │       ├── trainer.rs
-│       └── importance.rs
+│       ├── importance.rs
+│       ├── diagnostics.rs
+│       └── compression.rs
 │
 ├── manas-ingest/           ← text, files, folders → clean chunks
 │   └── src/
