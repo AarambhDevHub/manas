@@ -1,0 +1,14 @@
+[package]
+name = "manas-benches"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bench]]
+name = "bench"
+harness = false
+
+[dependencies]
+manas-core = { workspace = true }
+manas-store = { workspace = true }
+manas-learn = { workspace = true }

@@ -35,7 +35,8 @@
 14. [The Importance Scoring System](#14-the-importance-scoring-system)
 15. [The Freshness System](#15-the-freshness-system)
 16. [Error Handling Strategy](#16-error-handling-strategy)
-17. [What Manas Is Not](#17-what-manas-is-not)
+17. [Benchmarks and Integration Gates](#17-benchmarks-and-integration-gates)
+18. [What Manas Is Not](#18-what-manas-is-not)
 
 ---
 
@@ -450,13 +451,19 @@ manas/
 │           ├── toml.rs
 │           └── csv.rs
 │
-└── manas-cli/              ← USER INTERFACE
+├── manas-cli/              ← USER INTERFACE
     ├── Cargo.toml          ← deps: all crates above
     └── src/
         └── main.rs         ← std-only arg parsing, command routing, formatting
+│
+└── manas-benches/          ← TOOLING ONLY
+    └── benches/
+        └── bench.rs        ← B1-B8 benchmark harness, BENCHMARKS.md generator
 ```
 
-**Total crates: 5** (v1 had 9 — simpler is better)
+**Runtime crates: 5** (v1 had 9 — simpler is better)
+
+**Tooling crates: 1** (`manas-benches`, not part of the runtime path)
 
 **No `manas-language` crate** — the transformer path from v1 is removed.
 Language generation is a future milestone, not the foundation.
@@ -1178,7 +1185,44 @@ impl std::error::Error for ManasError { ... }
 
 ---
 
-## 17. What Manas Is Not
+## 17. Benchmarks and Integration Gates
+
+Stage 16 keeps performance and regression claims measurable.
+
+`manas-benches` is a dedicated non-runtime crate with a custom no-dependency
+benchmark harness:
+
+| ID | What it measures |
+|---|---|
+| B1 | Single `teach` call |
+| B2 | Single `ask` call |
+| B3 | `.manas` save |
+| B4 | `.manas` load |
+| B5 | Tokenizer throughput on 1000 words |
+| B6 | Full anti-forgetting proof |
+| B7 | Estimated 1000-neuron memory footprint |
+| B8 | Brain file growth per new fact |
+
+The committed benchmark report is generated with:
+
+```bash
+cargo bench -p manas-benches -- --write-markdown BENCHMARKS.md
+```
+
+CI runs the quick benchmark smoke:
+
+```bash
+cargo bench -p manas-benches -- --quick
+```
+
+The Stage 16 integration gate lives in `manas-cli/tests/stage16_integration.rs`
+because the workspace root is virtual and `cargo test --workspace` only runs
+tests attached to workspace packages. It covers the real demo, anti-forgetting,
+persistence, growth, protection, compression, freshness, and ingestion.
+
+---
+
+## 18. What Manas Is Not
 
 Manas v2 is honest about its scope:
 

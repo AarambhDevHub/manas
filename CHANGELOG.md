@@ -27,6 +27,7 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Stage 13 — The real demo.
 - Stage 14 — Inspect, neurons, and debug commands.
 - Stage 15 — Compression and forget command.
+- Stage 16 — Benchmarks and test suite.
 
 ### Added
 
@@ -105,10 +106,18 @@ Manas uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added compression tests proving neuron count reduction, frozen-neuron safety,
   high-importance survival, anti-forgetting after compression, dry-run behavior,
   and brain file-size shrinkage.
+- Added the non-runtime `manas-benches` workspace crate with B1-B8 benchmark
+  coverage for teach, ask, save, load, tokenization, anti-forgetting, memory
+  footprint, and brain file growth.
+- Added `BENCHMARKS.md` with generated full-run benchmark results.
+- Added Stage 16 integration coverage for the 22-fact demo, anti-forgetting,
+  persistence, growth, protection, compression, freshness, and ingestion.
+- Added CI benchmark smoke coverage through
+  `cargo bench -p manas-benches -- --quick`.
 
 ### Next
 
-- Stage 16 — Benchmarks and test suite.
+- Stage 17 — Layer growth.
 
 ---
 

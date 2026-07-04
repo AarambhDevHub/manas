@@ -6,6 +6,7 @@ members = [
     "manas-learn",
     "manas-ingest",
     "manas-cli",
+    "manas-benches",
 ]
 
 [workspace.package]

@@ -133,7 +133,8 @@ Manas v2 is in active development. The roadmap follows a strict rule:
 | Stage 13 | The real demo | Complete |
 | Stage 14 | Inspect, neurons, and debug commands | Complete |
 | Stage 15 | Compression and forget command | Complete |
-| Stage 16+ | Benchmarks, layer growth, future agents | Planned |
+| Stage 16 | Benchmarks and test suite | Complete |
+| Stage 17+ | Layer growth, future agents | Planned |
 
 Stages 1 and 2 are preserved as a standalone proof in
 `manas-core/src/experiment.rs`. Stage 3 promotes the proven engine into
@@ -163,6 +164,10 @@ inspectable with rich `inspect`, `neurons`, and `trace` commands for debugging
 learned weights, metadata, and query flow. Stage 15 adds conservative
 compression through `manas forget`, merging only stale low-importance `Open`
 hidden neurons that have a highly similar retained neighbor.
+Stage 16 adds a dedicated benchmark crate, committed benchmark report, CI
+benchmark smoke test, and an eight-test integration gate covering the demo,
+anti-forgetting, persistence, growth, protection, compression, freshness, and
+ingestion.
 
 Run the proof:
 
@@ -236,6 +241,19 @@ cargo test -p manas-core compression
 cargo test -p manas-learn compression
 ```
 
+Run the Stage 16 integration proof:
+
+```bash
+cargo test -p manas-cli stage16
+```
+
+Run the benchmarks:
+
+```bash
+cargo bench -p manas-benches -- --quick
+cargo bench -p manas-benches -- --write-markdown BENCHMARKS.md
+```
+
 Run the CLI proof:
 
 ```bash
@@ -249,6 +267,7 @@ Run the ingestion proof:
 cargo test -p manas-ingest
 ```
 
+See [BENCHMARKS.md](./BENCHMARKS.md) for the latest committed benchmark run.
 See [ROADMAP.md](./ROADMAP.md) for the full plan with tests.
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design.
 
@@ -281,7 +300,7 @@ cargo build --workspace --release
 
 ## Architecture
 
-Manas v2 is built from 5 Rust crates, each with a single responsibility:
+Manas v2 is built from 5 runtime Rust crates plus one benchmark tooling crate:
 
 ```
 ┌──────────────────────────────────────────┐
@@ -324,6 +343,9 @@ Manas v2 is built from 5 Rust crates, each with a single responsibility:
 **No `manas-language` crate.** No `manas-agent` crate. No `manas-memory` crate.
 The transformer path from v1 is removed. The text sidecar from v1 is removed.
 The answering system from v1 is replaced with direct neural weight retrieval.
+
+`manas-benches` is a non-runtime workspace crate used for Stage 16 benchmark
+measurement and CI smoke coverage.
 
 ---
 

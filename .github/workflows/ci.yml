@@ -44,5 +44,8 @@ jobs:
       - name: Build release
         run: cargo build --workspace --release
 
+      - name: Run benchmark smoke
+        run: cargo bench -p manas-benches -- --quick
+
       - name: Smoke test CLI binary
         run: ./target/release/manas --help
